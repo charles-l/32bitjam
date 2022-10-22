@@ -5,6 +5,7 @@ import functools
 from dataclasses import dataclass, field
 from argparse import Namespace
 import math
+import random
 import glm
 
 SCREEN_WIDTH = 320 * 3
@@ -23,29 +24,211 @@ cam = rl.Camera3D(
     rl.CAMERA_PERSPECTIVE,
 )
 
-rl.set_camera_mode(cam, rl.CAMERA_FREE)
 psx_shader = rl.load_shader(0, "psx.frag")
 render_target = rl.load_render_texture(320, 240)
 
-tex = rl.load_texture("texture_07.png")
-mesh = rl.gen_mesh_sphere(2, 32, 16)
+tex = rl.load_texture("texture_06.png")
+explosion_sheet = rl.load_texture("explosion_sheet.png")
 mat = rl.load_material_default()
 rl.set_material_texture(mat, rll.MATERIAL_MAP_ALBEDO, tex)
 
+redmat = rl.load_material_default()
+rl.set_material_texture(redmat, rll.MATERIAL_MAP_ALBEDO, tex)
+redmat.maps[0].color = (255, 0, 0)
+
+ship = rl.load_model("ship.glb").meshes[0]
+enemy = rl.load_model("enemy.glb").meshes[0]
+
+class Spring:
+    """Damped spring. Based on https://www.youtube.com/watch?v=KPoeNZZ6H4s"""
+    def __init__(self, f, z, r, x0):
+        self.k1 = z / (math.pi * f)
+        self.k2 = 1 / ((2 * math.pi * f)**2)
+        self.k3 = r * z / (2 * math.pi * f)
+        self.xp = x0
+        self.y = x0
+        self.yd = type(x0)(0)
+
+    def update(self, x, xd=None):
+        dt = rl.get_frame_time() or 0.01
+        if xd is None:
+            xd = (x - self.xp) / dt
+            self.xp = x
+        k2_stable = max(self.k2, 1.1 * ((dt**2)/4 + dt*self.k1/2))
+        self.y += dt * self.yd
+        self.yd += dt * (x + self.k3*xd - self.y - self.k1*self.yd) / k2_stable
+        return self.y
+
+
 state = Namespace(
-    pos=glm.vec3(0)
+    vel=glm.vec3(0),
+    pos=glm.vec3(0),
+    pstate='alive',
+    bullet_cooldown=0,
+    yspring=Spring(2, 0.5, 0, 0),
+    rotspring=Spring(1, 0.5, 2, 0),
+    camspring=Spring(0.1, 10, 2, glm.vec3(0, 8, 4)),
+
+    bullets_pos=glm.array.zeros(100, glm.vec3),
+    bullets_vel=glm.array.zeros(100, glm.vec3),
+    bullet_i=0,
+
+    enemy_pos=glm.array(
+        [glm.vec3(random.randrange(-20, 20), 0, random.randrange(-1000, -10)) for _ in range(100)]
+        ),
+
+    explosions=[],
     )
 
-def update(state):
-    rl.update_camera(cam)
 
-    state.pos.x -= 0.1
+GRID_SIZE = 8
+class SpatialHash:
+    def __init__(self, grid_size):
+        self.hash = {}
+
+    @classmethod
+    def get_bucket(p: glm.vec3):
+        return glm.round(p.xz / GRID_SIZE).to_tuple()
+
+    def __getitem__(self, k):
+        return self.hash.get(k, [])
+
+    def add(self, pos, item):
+        k = self.get_bucket(pos)
+        self.hash[k] = self.hash.get(k, []).append(item)
+
+    def around(self, pos):
+        r = []
+        for o in (
+                glm.vec3(GRID_SIZE, 0, 0),
+                glm.vec3(-GRID_SIZE, 0, 0),
+                glm.vec3(0, 0,  GRID_SIZE),
+                glm.vec3(0, 0, -GRID_SIZE),
+                glm.vec3(GRID_SIZE, 0,  GRID_SIZE),
+                glm.vec3(GRID_SIZE, 0, -GRID_SIZE),
+                glm.vec3(-GRID_SIZE, 0,  GRID_SIZE),
+                glm.vec3(-GRID_SIZE, 0, -GRID_SIZE),
+                ):
+            r.extend(self[self.get_bucket(pos + o)])
+        return r
+
+
+spatial_hash = {}
+
+def reinit(state):
+    for p in state.bullets_pos:
+        if glm.length2(p) != 0:
+            spatial_hash[glm.round(p / 10)]
+
+def update(state):
+    # input
+    inputv = glm.vec2()
+    dive = 0
+    rotation = 0
+
+    if rl.is_key_down(rl.KEY_RIGHT):
+        inputv.x += 1
+        rotation -= 0.3
+    if rl.is_key_down(rl.KEY_LEFT):
+        inputv.x -= 1
+        rotation += 0.3
+    if rl.is_key_down(rl.KEY_UP):
+        inputv.y -= 1
+    if rl.is_key_down(rl.KEY_DOWN):
+        inputv.y += 1
+    if rl.is_key_down(rl.KEY_LEFT_SHIFT):
+        dive = -2.4
+    else:
+        dive = 0
+
+    interp_pos = state.pos
+
+    if state.pstate == 'alive':
+        state.pos.y = dive
+        interp_pos = glm.vec3(state.pos.x, state.yspring.update(dive), state.pos.z)
+        if rl.is_key_down(rl.KEY_SPACE):
+            if state.bullet_cooldown <= 0:
+                state.bullets_pos[state.bullet_i] = glm.vec3(interp_pos)
+                state.bullets_vel[state.bullet_i] = glm.vec3(state.vel) + glm.vec3(0, 0, -0.4)
+                state.bullet_i = (state.bullet_i + 1) % len(state.bullets_pos)
+                state.bullet_cooldown = 0.1
+
+        if glm.length(inputv) != 0:
+            inputv = glm.normalize(inputv) * 0.1
+            state.vel.x += inputv.x
+            state.vel.z += inputv.y
+        else:
+            state.vel *= 0.7
+            if state.vel.z > -0.8:
+                state.vel.z = -0.8
+
+        # clamp max vel
+        if glm.length(state.vel) > 2:
+            state.vel = glm.normalize(state.vel) * 2
+
+        state.pos += state.vel
+
+        if glm.abs(state.pos.x) > 20:
+            state.pos.x = glm.sign(state.pos.x) * 20
+            state.vel.x = 0
+
+        state.rotspring.update(rotation)
+        state.bullet_cooldown -= rl.get_frame_time()
+
+        for e in state.enemy_pos:
+            if glm.distance(e, state.pos) < 2:
+                state.pstate = 'dead'
+                state.explosions.append((state.pos, rl.get_time()))
+    elif state.pstate == 'dead':
+        if rl.is_key_pressed(rl.KEY_DOWN):
+            state.pos = glm.vec3()
+            state.pstate = 'alive'
+            cam.position = (0, 4, 4)
+
+
+    # cam update
+    camera_goal_pos = interp_pos + glm.vec3(0, 5 + state.vel.z * 2, 8)
+    state.camspring.update(camera_goal_pos)
+    cam.position = state.camspring.y.to_tuple()
+    cam.target = (interp_pos + glm.vec3(0, 0, -4)).to_tuple()
+    is_under_water = cam.position.y < -2
+
+    cam.fovy = 45 + (glm.distance(interp_pos, (cam.position.x, cam.position.y, cam.position.z)) / 16) * 20
+
+    # update bullet vels
+    state.bullets_pos += state.bullets_vel
 
     rl.begin_texture_mode(render_target)
     rl.clear_background(rl.GRAY)
     rl.begin_mode_3d(cam)
-    rl.draw_mesh(mesh, mat, sum(glm.transpose(glm.translate(state.pos)).to_tuple(), ()))
-    rl.draw_grid(10, 1)
+
+    if state.pstate == 'alive':
+        rl.draw_mesh(ship, mat, sum(
+            glm.transpose(glm.translate(interp_pos) @ glm.rotate(state.rotspring.y, glm.vec3(0, 0, 1))).to_tuple(),
+            ()))
+
+    for e in state.enemy_pos:
+        rl.draw_mesh(enemy,
+                     redmat,
+                     sum(
+                         glm.transpose(glm.translate(e)).to_tuple(),
+                         ()))
+
+    #rl.draw_grid(50, 2)
+
+    for p in state.bullets_pos:
+        if glm.length2(p) != 0:
+            rl.draw_sphere(p.to_tuple(), 0.1, rl.GREEN)
+
+    rl.draw_plane(glm.vec3(0, -2, state.pos.z - 170).to_tuple(), (40, 400), rl.color_alpha(rl.BLUE, 0.3))
+
+    for i, (pos, init_time) in enumerate(state.explosions):
+        frame = int((rl.get_time() - init_time) / 0.05)
+        if frame > 4:
+            del state.explosions[i]
+        else:
+            rl.draw_billboard_rec(cam, explosion_sheet, rl.Rectangle(128 * frame, 0, 128, 128), pos.to_tuple(), (4, 4), rl.WHITE)
+
     rl.end_mode_3d()
     rl.end_texture_mode()
 
@@ -56,8 +239,10 @@ def update(state):
                         rl.Rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT),
                         rl.Vector2(0, 0),
                         0,
-                        rl.WHITE)
+                        rl.BLUE if is_under_water else rl.WHITE)
     rl.end_shader_mode()
+    if state.pstate == 'dead':
+        rl.draw_text('Press down arrow to restart', 10, int(SCREEN_HEIGHT / 2), 50, rl.WHITE)
 
 if __name__ == "__main__":
     while not rl.window_should_close():

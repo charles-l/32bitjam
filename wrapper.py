@@ -20,6 +20,7 @@ while not rl.window_should_close():
         print('reset')
         state = copy.deepcopy(orig_state)
         reload(game)
+        game.reinit(state)
         error = None
 
     if error is None:
@@ -27,6 +28,7 @@ while not rl.window_should_close():
             game.update(state)
         except Exception as e:
             error = e
+            print(''.join(tb.format_exception(None, error, error.__traceback__)))
     else:
         rl.end_shader_mode()
         rl.draw_text(''.join(tb.format_exception(None, error, error.__traceback__)), 10, 40, 10, rl.RED)

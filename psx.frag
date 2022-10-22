@@ -38,5 +38,5 @@ void main() {
 	c >>= (8 - color_depth);
 
 	// Convert back to [0.0, 1.0] range
-	finalColor = vec4(vec3(c) / float(1 << color_depth), 1);
+	finalColor = vec4(vec3(c) / float(1 << color_depth), 1) * fragColor;
 }
