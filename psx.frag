@@ -4,7 +4,7 @@ in vec2 fragTexCoord;
 in vec4 fragColor;
 
 uniform sampler2D texture0;
-uniform vec4 colDiffuse;
+uniform vec3 viewPos;
 
 out vec4 finalColor;
 
@@ -27,16 +27,18 @@ int dithering_pattern(ivec2 fragcoord) {
 
 void main() {
     ivec2 uv = ivec2(fragTexCoord.xy / float(resolution_scale));
-	vec3 color = texture(texture0, fragTexCoord).rgb;
 
-	// Convert from [0.0, 1.0] range to [0, 255] range
-	ivec3 c = ivec3(round(color * 255.0));
+    // gamma correct
+    vec3 color = pow(texture(texture0, fragTexCoord).rgb, vec3(1.0/2.2));
+
+    // Convert from [0.0, 1.0] range to [0, 255] range
+    ivec3 c = ivec3(round(color * 255.0));
 
     c += ivec3(dithering_pattern(uv));
 
-	// Truncate from 8 bits to color_depth bits
-	c >>= (8 - color_depth);
+    // Truncate from 8 bits to color_depth bits
+    c >>= (8 - color_depth);
 
-	// Convert back to [0.0, 1.0] range
-	finalColor = vec4(vec3(c) / float(1 << color_depth), 1) * fragColor;
+    // Convert back to [0.0, 1.0] range
+    finalColor = vec4(vec3(c) / float(1 << color_depth), 1) * fragColor;
 }

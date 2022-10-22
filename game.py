@@ -14,7 +14,7 @@ SCREEN_HEIGHT = 240 * 3
 if __name__ == "__main__":
     rl.init_window(SCREEN_WIDTH, SCREEN_HEIGHT, "game")
     rl.set_target_fps(60)
-    rl.set_config_flags(rl.FLAG_MSAA_4X_HINT | rl.FLAG_VSYNC_HINT)
+    rl.set_config_flags(rl.FLAG_VSYNC_HINT)
 
 cam = rl.Camera3D(
     rl.Vector3(-10, 15, -10),
@@ -25,19 +25,29 @@ cam = rl.Camera3D(
 )
 
 psx_shader = rl.load_shader(0, "psx.frag")
+fog_shader = rl.load_shader("base.vert", "fog.frag")
+fog_shader.locs[rl.SHADER_LOC_MATRIX_MODEL] = rl.get_shader_location(fog_shader, "matModel")
+fog_shader.locs[rl.SHADER_LOC_VECTOR_VIEW] = rl.get_shader_location(fog_shader, "viewPos")
+FOG_DENSITY_LOC = rl.get_shader_location(fog_shader, "fogDensity")
+FOG_COLOR_LOC = rl.get_shader_location(fog_shader, "fogColor")
+
 render_target = rl.load_render_texture(320, 240)
 
 tex = rl.load_texture("texture_06.png")
 explosion_sheet = rl.load_texture("explosion_sheet.png")
 mat = rl.load_material_default()
 rl.set_material_texture(mat, rll.MATERIAL_MAP_ALBEDO, tex)
+mat.shader = fog_shader
 
 redmat = rl.load_material_default()
 rl.set_material_texture(redmat, rll.MATERIAL_MAP_ALBEDO, tex)
 redmat.maps[0].color = (255, 0, 0)
+redmat.shader = fog_shader
 
 ship = rl.load_model("ship.glb").meshes[0]
 enemy = rl.load_model("enemy.glb").meshes[0]
+
+WATER_LEVEL = -2
 
 class Spring:
     """Damped spring. Based on https://www.youtube.com/watch?v=KPoeNZZ6H4s"""
@@ -64,6 +74,7 @@ state = Namespace(
     vel=glm.vec3(0),
     pos=glm.vec3(0),
     pstate='alive',
+    water=0,
     bullet_cooldown=0,
     yspring=Spring(2, 0.5, 0, 0),
     rotspring=Spring(1, 0.5, 2, 0),
@@ -78,6 +89,7 @@ state = Namespace(
         ),
 
     explosions=[],
+    water_particles=[],
     )
 
 
@@ -133,11 +145,20 @@ def update(state):
         inputv.x -= 1
         rotation += 0.3
     if rl.is_key_down(rl.KEY_UP):
-        inputv.y -= 1
+        if state.water > 0:
+            inputv.y -= 1
+            state.water_particles.append((state.pos + glm.vec3(0, -0.1, -0.1), state.vel + glm.vec3(0, 0, 1)))
+            state.water -= 0.1 * rl.get_frame_time()
     if rl.is_key_down(rl.KEY_DOWN):
         inputv.y += 1
     if rl.is_key_down(rl.KEY_LEFT_SHIFT):
-        dive = -2.4
+        dive = -6 #-2.4
+    elif rl.is_key_down(rl.KEY_LEFT_CONTROL):
+        if state.water > 0:
+            dive = 3
+            state.water -= 0.2 * rl.get_frame_time()
+            state.water_particles.append((state.pos + glm.vec3(-0.3, -0.1, -0.1), state.vel + glm.vec3(0, -1, 0)))
+            state.water_particles.append((state.pos + glm.vec3(0.3, -0.1, -0.1), state.vel + glm.vec3(0, -1, 0)))
     else:
         dive = 0
 
@@ -174,6 +195,8 @@ def update(state):
 
         state.rotspring.update(rotation)
         state.bullet_cooldown -= rl.get_frame_time()
+        if interp_pos.y < WATER_LEVEL:
+            state.water = min(state.water + 1 * rl.get_frame_time(), 1)
 
         for e in state.enemy_pos:
             if glm.distance(e, state.pos) < 2:
@@ -191,12 +214,28 @@ def update(state):
     state.camspring.update(camera_goal_pos)
     cam.position = state.camspring.y.to_tuple()
     cam.target = (interp_pos + glm.vec3(0, 0, -4)).to_tuple()
-    is_under_water = cam.position.y < -2
+    is_under_water = cam.position.y < WATER_LEVEL
+
+    rl.set_shader_value(fog_shader, fog_shader.locs[rl.SHADER_LOC_VECTOR_VIEW], rl.ffi.cast("void *", rl.ffi.addressof(cam.position)), rl.SHADER_UNIFORM_VEC3)
+
+    if is_under_water:
+        rl.set_shader_value(fog_shader, FOG_DENSITY_LOC, rl.ffi.new("float *", 0.2), rl.SHADER_UNIFORM_FLOAT)
+        rl.set_shader_value(fog_shader, FOG_COLOR_LOC, rl.ffi.new("float[3]", [0, 0, 1]), rl.SHADER_UNIFORM_VEC3)
+    else:
+        rl.set_shader_value(fog_shader, FOG_DENSITY_LOC, rl.ffi.new("float *", 0.03), rl.SHADER_UNIFORM_FLOAT)
+        rl.set_shader_value(fog_shader, FOG_COLOR_LOC, rl.ffi.new("float[3]", [0.1, 0.1, 0.4]), rl.SHADER_UNIFORM_VEC3)
 
     cam.fovy = 45 + (glm.distance(interp_pos, (cam.position.x, cam.position.y, cam.position.z)) / 16) * 20
 
     # update bullet vels
     state.bullets_pos += state.bullets_vel
+
+    # update water particles
+    for i, (pos, vel) in enumerate(state.water_particles):
+        pos += vel
+        pos.y -= 0.098
+        if pos.y < WATER_LEVEL - 8:
+            del state.water_particles[i]
 
     rl.begin_texture_mode(render_target)
     rl.clear_background(rl.GRAY)
@@ -220,7 +259,7 @@ def update(state):
         if glm.length2(p) != 0:
             rl.draw_sphere(p.to_tuple(), 0.1, rl.GREEN)
 
-    rl.draw_plane(glm.vec3(0, -2, state.pos.z - 170).to_tuple(), (40, 400), rl.color_alpha(rl.BLUE, 0.3))
+    rl.draw_plane(glm.vec3(0, WATER_LEVEL, state.pos.z - 170).to_tuple(), (40, 400), rl.color_alpha(rl.BLUE, 0.3))
 
     for i, (pos, init_time) in enumerate(state.explosions):
         frame = int((rl.get_time() - init_time) / 0.05)
@@ -228,6 +267,9 @@ def update(state):
             del state.explosions[i]
         else:
             rl.draw_billboard_rec(cam, explosion_sheet, rl.Rectangle(128 * frame, 0, 128, 128), pos.to_tuple(), (4, 4), rl.WHITE)
+
+    for pos, _ in state.water_particles:
+        rl.draw_sphere(pos.to_tuple(), 0.3, rl.BLUE)
 
     rl.end_mode_3d()
     rl.end_texture_mode()
@@ -239,8 +281,10 @@ def update(state):
                         rl.Rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT),
                         rl.Vector2(0, 0),
                         0,
-                        rl.BLUE if is_under_water else rl.WHITE)
+                        rl.SKYBLUE if is_under_water else rl.WHITE)
     rl.end_shader_mode()
+    if state.pstate == 'alive':
+        rl.draw_ring((SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 40), 10, 13, 0, 360 / (1 / state.water) if state.water > 0 else 0, 16, rl.SKYBLUE)
     if state.pstate == 'dead':
         rl.draw_text('Press down arrow to restart', 10, int(SCREEN_HEIGHT / 2), 50, rl.WHITE)
 
