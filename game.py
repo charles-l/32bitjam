@@ -59,14 +59,14 @@ class Spring:
         self.y = x0
         self.yd = type(x0)(0)
 
-    def update(self, x, xd=None):
+    def update(self, x, xd=None, k3=None):
         dt = rl.get_frame_time() or 0.01
         if xd is None:
             xd = (x - self.xp) / dt
             self.xp = x
         k2_stable = max(self.k2, 1.1 * ((dt**2)/4 + dt*self.k1/2))
         self.y += dt * self.yd
-        self.yd += dt * (x + self.k3*xd - self.y - self.k1*self.yd) / k2_stable
+        self.yd += dt * (x + (k3 or self.k3)*xd - self.y - self.k1*self.yd) / k2_stable
         return self.y
 
 
@@ -210,7 +210,12 @@ def update(state):
 
 
     # cam update
-    camera_goal_pos = interp_pos + glm.vec3(0, 5 + state.vel.z * 2, 8)
+    if state.pstate == 'alive':
+        camera_goal_pos = interp_pos + glm.vec3(0, 5 + state.vel.z * 2, 8)
+    elif state.pstate == 'dead':
+        camera_goal_pos = (state.pos + glm.vec3(0, -0.3 + state.camspring.y.y, 12))
+    else:
+        assert False
     state.camspring.update(camera_goal_pos)
     cam.position = state.camspring.y.to_tuple()
     cam.target = (interp_pos + glm.vec3(0, 0, -4)).to_tuple()
@@ -262,11 +267,11 @@ def update(state):
     rl.draw_plane(glm.vec3(0, WATER_LEVEL, state.pos.z - 170).to_tuple(), (40, 400), rl.color_alpha(rl.BLUE, 0.3))
 
     for i, (pos, init_time) in enumerate(state.explosions):
-        frame = int((rl.get_time() - init_time) / 0.05)
-        if frame > 4:
+        frame = int((rl.get_time() - init_time) / 0.04)
+        if frame > 12:
             del state.explosions[i]
         else:
-            rl.draw_billboard_rec(cam, explosion_sheet, rl.Rectangle(128 * frame, 0, 128, 128), pos.to_tuple(), (4, 4), rl.WHITE)
+            rl.draw_billboard_rec(cam, explosion_sheet, rl.Rectangle(256 * frame, 0, 256, 256), pos.to_tuple(), (4, 4), rl.WHITE)
 
     for pos, _ in state.water_particles:
         rl.draw_sphere(pos.to_tuple(), 0.3, rl.BLUE)
