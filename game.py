@@ -1,6 +1,7 @@
 import pyray as rl
 
 import raylib as rll
+import bisect
 import functools
 from dataclasses import dataclass, field
 from argparse import Namespace
@@ -86,7 +87,7 @@ state = Namespace(
     pos=glm.vec3(0),
     died_pos=glm.vec3(),
     pstate="alive",
-    water=0,
+    water=0.1,
     bullet_cooldown=0,
     yspring=Spring(2, 0.5, 0, 0),
     rotspring=Spring(1, 0.5, 2, 0),
@@ -94,20 +95,23 @@ state = Namespace(
     bullets_pos=glm.array.zeros(100, glm.vec3),
     bullets_vel=glm.array.zeros(100, glm.vec3),
     bullet_i=0,
-    enemy_pos=glm.array(
-        [
-            glm.vec3(random.randrange(-20, 20), 0, random.randrange(-1000, -10))
+    spike_obstacles=glm.array(
+        sorted([
+            glm.vec3(random.randrange(-20, 20), 0, random.randrange(-10000, -10))
             for _ in range(100)
-        ]
+            ], key=lambda v: v.z)
     ),
     explosions=[],
     water_particles=[],
-    obstacles=[-100, -200, -400],
+    obstacles=sorted([glm.vec3(0, -1, -100),
+                      glm.vec3(0, -1, -200),
+                      glm.vec3(0, -1, -400)], key=lambda v: v.z),
 )
 
 OBSTACLE_DEPTH = -401
 OBSTACLE_DIMENSIONS = (40, 800, 4)
 PLAYER_RADIUS = 0.5
+BULLET_RADIUS = 0.1
 
 
 def obstacle_bounding_box(z):
@@ -169,19 +173,26 @@ def reinit(nstate):
         if glm.length2(p) != 0:
             spatial_hash[glm.round(p / 10)]
 
+def z_near(arr, z, depth, key=lambda v: v.z):
+    """Assumes arr is sorted in ascending order. Searches for elements in
+    range `z - depth` to `z + depth`"""
+    i = bisect.bisect_left(arr, z - depth, key=key)
+    j = bisect.bisect_right(arr, z + depth, key=key)
+    return arr[i:j]
 
-def collide_with_obstacle(player_pos):
-    for e in state.enemy_pos:
-        if glm.distance(e, player_pos) < 2 + PLAYER_RADIUS:
-            return player_pos
 
-    for z in state.obstacles:
+def collide_with_obstacle(pos, radius):
+    for e in z_near(state.spike_obstacles, pos.z, radius + 2):
+        if glm.distance(e, pos) < 2 + radius:
+            return pos
+
+    for p in z_near(state.obstacles, pos.z, radius + 4):
         if rl.check_collision_box_sphere(
-            obstacle_bounding_box(z),
-            player_pos.to_tuple(),
+            obstacle_bounding_box(pos.z),
+            pos.to_tuple(),
             PLAYER_RADIUS,
         ):
-            return glm.vec3(player_pos.xy, z + OBSTACLE_DIMENSIONS[2] / 2 + 0.1)
+            return glm.vec3(pos.xy, p.z + OBSTACLE_DIMENSIONS[2] / 2 + 0.1)
     return None
 
 
@@ -218,6 +229,8 @@ def update(state):
 
     interp_pos = state.pos
 
+    waterlog_factor = 1 - (max(state.water - 1.5, 0) * 0.5)
+
     if state.pstate == "alive":
         state.pos.y = dive
         interp_pos = glm.vec3(state.pos.x, state.yspring.update(dive), state.pos.z)
@@ -236,22 +249,24 @@ def update(state):
             inputv = glm.normalize(inputv) * 0.1
             state.vel.x += inputv.x
 
-            if inputv.y < 0 and state.water > 0:
-                state.water_particles.append(
-                    (interp_pos + glm.vec3(0, -0.1, -0.1), state.vel + glm.vec3(0, 0, 1))
-                )
-                state.water -= 0.1 * rl.get_frame_time()
-                state.vel.z += inputv.y
-            elif inputv.y > 0:
-                state.vel.z += inputv.y / 2
+        if inputv.y < 0 and state.water > 0:
+            state.water_particles.append(
+                (interp_pos + glm.vec3(0, -0.1, -0.1), state.vel + glm.vec3(0, 0, 1))
+            )
+            state.water -= 0.1 * rl.get_frame_time()
+            state.vel.z += inputv.y * (1 if glm.length(state.vel.z) < 2 else 0.03)
+        elif inputv.y > 0:
+            state.vel.z += inputv.y / 2
         else:
-            state.vel *= 0.7
-            if state.vel.z > -0.8:
-                state.vel.z = -0.8
+            state.vel.z *= 0.99
+            state.vel.x *= 0.9
+
+        # add waterlog factor
+        state.vel *= waterlog_factor
 
         # clamp max vel
-        if glm.length(state.vel) > 2:
-            state.vel = glm.normalize(state.vel) * 2
+        if glm.length(state.vel) > 3:
+            state.vel = glm.normalize(state.vel) * 3
 
         state.pos += state.vel
 
@@ -264,7 +279,7 @@ def update(state):
         if interp_pos.y < WATER_LEVEL:
             state.water += 0.5 * rl.get_frame_time()
 
-        if died_pos := collide_with_obstacle(interp_pos):
+        if died_pos := collide_with_obstacle(interp_pos, PLAYER_RADIUS):
             state.pstate = "dead"
             state.died_pos = died_pos
             state.explosions.append((died_pos, rl.get_time()))
@@ -338,6 +353,11 @@ def update(state):
 
     # update bullet vels
     state.bullets_pos += state.bullets_vel
+    for i, bullet in enumerate(state.bullets_pos):
+        if collide_with_obstacle(bullet, BULLET_RADIUS):
+            state.bullets_pos[i] = glm.vec3()
+            state.bullets_vel[i] = glm.vec3()
+
 
     # update water particles
     for i, (pos, vel) in enumerate(state.water_particles):
@@ -363,8 +383,8 @@ def update(state):
             ),
         )
 
-    for e in state.enemy_pos:
-        rl.draw_mesh(enemy, redmat, sum(glm.transpose(glm.translate(e)).to_tuple(), ()))
+    for p in state.spike_obstacles:
+        rl.draw_mesh(enemy, redmat, sum(glm.transpose(glm.translate(p)).to_tuple(), ()))
 
     rl.draw_sphere_wires(state.died_pos.to_tuple(), PLAYER_RADIUS, 4, 4, rl.WHITE)
 
@@ -372,11 +392,11 @@ def update(state):
 
     for p in state.bullets_pos:
         if glm.length2(p) != 0:
-            rl.draw_sphere(p.to_tuple(), 0.1, rl.GREEN)
+            rl.draw_sphere(p.to_tuple(), BULLET_RADIUS, rl.GREEN)
 
     for o in state.obstacles:
         rl.draw_cube(
-            (0, OBSTACLE_DEPTH, o),
+            (0, OBSTACLE_DEPTH, o.z),
             OBSTACLE_DIMENSIONS[0],
             OBSTACLE_DIMENSIONS[1],
             OBSTACLE_DIMENSIONS[2],
@@ -440,6 +460,13 @@ def update(state):
             16,
             rl.RED,
         )
+        rl.draw_text(
+            f"{round(abs(state.vel.z)*10):} m/s",
+            SCREEN_WIDTH // 2 + 40,
+            SCREEN_HEIGHT // 2 - 20,
+            20,
+            rl.GREEN)
+
     if state.pstate == "dead":
         rl.draw_text(
             "Press down arrow to restart", 10, int(SCREEN_HEIGHT / 2), 50, rl.WHITE
@@ -447,7 +474,10 @@ def update(state):
 
     if state.water - 1 > 0.1:
         if (rl.get_time() % 0.4) < 0.2:
-            rl.draw_text("WARNING: waterlog", SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 90, 30, rl.RED)
+            x = SCREEN_WIDTH // 2 + 40
+            rl.draw_text("WARNING: WATERLOGGING", x, SCREEN_HEIGHT // 2 - 120, 30, rl.RED)
+            if waterlog_factor < 1:
+                rl.draw_text(f"{int((2-state.water)*100)}% capacity", x, SCREEN_HEIGHT // 2 - 90, 30, rl.RED)
 
 if __name__ == "__main__":
     while not rl.window_should_close():
