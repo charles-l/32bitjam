@@ -214,11 +214,6 @@ def update(state):
     interp_pos = state.pos
 
     if state.pstate == "alive":
-        if inputv.y < 0 and state.water > 0:
-            state.water_particles.append(
-                (interp_pos + glm.vec3(0, -0.1, -0.1), state.vel + glm.vec3(0, 0, 1))
-            )
-            state.water -= 0.1 * rl.get_frame_time()
         state.pos.y = dive
         interp_pos = glm.vec3(state.pos.x, state.yspring.update(dive), state.pos.z)
         if rl.is_key_down(rl.KEY_SPACE):
@@ -235,7 +230,15 @@ def update(state):
         if glm.length(inputv) != 0:
             inputv = glm.normalize(inputv) * 0.1
             state.vel.x += inputv.x
-            state.vel.z += inputv.y
+
+            if inputv.y < 0 and state.water > 0:
+                state.water_particles.append(
+                    (interp_pos + glm.vec3(0, -0.1, -0.1), state.vel + glm.vec3(0, 0, 1))
+                )
+                state.water -= 0.1 * rl.get_frame_time()
+                state.vel.z += inputv.y
+            elif inputv.y > 0:
+                state.vel.z += inputv.y / 2
         else:
             state.vel *= 0.7
             if state.vel.z > -0.8:
