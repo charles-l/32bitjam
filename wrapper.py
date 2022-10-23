@@ -4,6 +4,7 @@ import traceback as tb
 import copy
 
 rl.init_window(320 * 3, 240 * 3, 'game [debug]')
+rl.init_audio_device()
 rl.set_target_fps(60)
 
 import game
