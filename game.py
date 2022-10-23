@@ -173,7 +173,7 @@ def reinit(nstate):
 def collide_with_obstacle(player_pos):
     for e in state.enemy_pos:
         if glm.distance(e, player_pos) < 2 + PLAYER_RADIUS:
-            return True
+            return player_pos
 
     for z in state.obstacles:
         if rl.check_collision_box_sphere(
@@ -181,8 +181,8 @@ def collide_with_obstacle(player_pos):
             player_pos.to_tuple(),
             PLAYER_RADIUS,
         ):
-            return True
-    return False
+            return glm.vec3(player_pos.xy, z + OBSTACLE_DIMENSIONS[2] / 2 + 0.1)
+    return None
 
 
 def update(state):
@@ -264,10 +264,10 @@ def update(state):
         if interp_pos.y < WATER_LEVEL:
             state.water += 0.5 * rl.get_frame_time()
 
-        if collide_with_obstacle(interp_pos):
+        if died_pos := collide_with_obstacle(interp_pos):
             state.pstate = "dead"
-            state.died_pos = interp_pos
-            state.explosions.append((interp_pos, rl.get_time()))
+            state.died_pos = died_pos
+            state.explosions.append((died_pos, rl.get_time()))
 
         if state.water > 2:
             state.pstate = "dead"
