@@ -84,6 +84,7 @@ class Spring:
 state = Namespace(
     vel=glm.vec3(0),
     pos=glm.vec3(0),
+    died_pos=glm.vec3(),
     pstate="alive",
     water=0,
     bullet_cooldown=0,
@@ -107,6 +108,7 @@ state = Namespace(
 OBSTACLE_DEPTH = -401
 OBSTACLE_DIMENSIONS = (40, 800, 4)
 PLAYER_RADIUS = 0.5
+
 
 def obstacle_bounding_box(z):
     return rl.BoundingBox(
@@ -159,7 +161,10 @@ class SpatialHash:
 spatial_hash = {}
 
 
-def reinit(state):
+def reinit(nstate):
+    global state
+    state = nstate
+
     for p in state.bullets_pos:
         if glm.length2(p) != 0:
             spatial_hash[glm.round(p / 10)]
@@ -200,8 +205,8 @@ def update(state):
         dive = -6  # -2.4
     elif rl.is_key_down(rl.KEY_LEFT_CONTROL):
         if state.water > 0:
-            dive = 3
             state.water -= 0.2 * rl.get_frame_time()
+            dive = 3
             state.water_particles.append(
                 (state.pos + glm.vec3(-0.3, -0.1, -0.1), state.vel + glm.vec3(0, -1, 0))
             )
@@ -257,16 +262,24 @@ def update(state):
         state.rotspring.update(rotation)
         state.bullet_cooldown -= rl.get_frame_time()
         if interp_pos.y < WATER_LEVEL:
-            state.water = min(state.water + 1 * rl.get_frame_time(), 1)
+            state.water += 0.5 * rl.get_frame_time()
 
-        if collide_with_obstacle(state.pos):
+        if collide_with_obstacle(interp_pos):
             state.pstate = "dead"
-            state.explosions.append((state.pos, rl.get_time()))
+            state.died_pos = interp_pos
+            state.explosions.append((interp_pos, rl.get_time()))
+
+        if state.water > 2:
+            state.pstate = "dead"
+            state.died_pos = interp_pos
+            state.explosions.append((interp_pos, rl.get_time()))
+
     elif state.pstate == "dead":
         if rl.is_key_pressed(rl.KEY_DOWN):
             state.pos = glm.vec3()
             state.pstate = "alive"
             cam.position = (0, 4, 4)
+            state.water = 0
 
     # cam update
     if state.pstate == "alive":
@@ -353,7 +366,7 @@ def update(state):
     for e in state.enemy_pos:
         rl.draw_mesh(enemy, redmat, sum(glm.transpose(glm.translate(e)).to_tuple(), ()))
 
-    rl.draw_sphere_wires(interp_pos.to_tuple(), PLAYER_RADIUS, 4, 4, rl.WHITE)
+    rl.draw_sphere_wires(state.died_pos.to_tuple(), PLAYER_RADIUS, 4, 4, rl.WHITE)
 
     # rl.draw_grid(50, 2)
 
@@ -408,20 +421,33 @@ def update(state):
     )
     rl.end_shader_mode()
     if state.pstate == "alive":
+        water, waterlogged = min(state.water, 1), max(state.water - 1, 0)
         rl.draw_ring(
             (SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 40),
             10,
             13,
             0,
-            360 / (1 / state.water) if state.water > 0 else 0,
+            360 / (1 / water) if water > 0 else 0,
             16,
             rl.SKYBLUE,
+        )
+        rl.draw_ring(
+            (SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 40),
+            10,
+            13,
+            0,
+            360 / (1 / waterlogged) if waterlogged > 0 else 0,
+            16,
+            rl.RED,
         )
     if state.pstate == "dead":
         rl.draw_text(
             "Press down arrow to restart", 10, int(SCREEN_HEIGHT / 2), 50, rl.WHITE
         )
 
+    if state.water - 1 > 0.1:
+        if (rl.get_time() % 0.4) < 0.2:
+            rl.draw_text("WARNING: waterlog", SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 90, 30, rl.RED)
 
 if __name__ == "__main__":
     while not rl.window_should_close():
