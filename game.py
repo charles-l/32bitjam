@@ -12,6 +12,36 @@ import glm
 SCREEN_WIDTH = 320 * 3
 SCREEN_HEIGHT = 240 * 3
 
+def load_render_texture_with_depth(width, height):
+    target = rl.RenderTexture()
+    target.id = rll.rlLoadFramebuffer(width, height)
+    assert target.id > 0
+
+    rll.rlEnableFramebuffer(target.id)
+
+    target.texture.id = rll.rlLoadTexture(rl.ffi.NULL, width, height, rll.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1)
+    target.texture.width = width
+    target.texture.height = height
+    target.texture.format = rll.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8
+    target.texture.mipmaps = 1
+
+    target.depth.id = rll.rlLoadTextureDepth(width, height, False)
+    target.depth.width = width
+    target.depth.height = height
+    target.depth.format = 19
+    target.depth.mipmaps = 1
+
+    rll.rlFramebufferAttach(target.id, target.texture.id, rll.RL_ATTACHMENT_COLOR_CHANNEL0, rll.RL_ATTACHMENT_TEXTURE2D, 0)
+    rll.rlFramebufferAttach(target.id, target.depth.id, rll.RL_ATTACHMENT_DEPTH, rll.RL_ATTACHMENT_TEXTURE2D, 0)
+
+    assert rll.rlFramebufferComplete(target.id)
+
+    rll.rlDisableFramebuffer()
+
+    return target
+
+
+
 if __name__ == "__main__":
     rl.init_window(SCREEN_WIDTH, SCREEN_HEIGHT, "game")
     rl.set_target_fps(60)
@@ -26,7 +56,11 @@ cam = rl.Camera3D(
     rl.CAMERA_PERSPECTIVE,
 )
 
+render_target = load_render_texture_with_depth(320, 240)
+reflect_target = rl.load_render_texture(320, 240)
+
 psx_shader = rl.load_shader(0, "psx.frag")
+
 fog_shader = rl.load_shader("base.vert", "fog.frag")
 fog_shader.locs[rl.SHADER_LOC_MATRIX_MODEL] = rl.get_shader_location(
     fog_shader, "matModel"
@@ -42,8 +76,6 @@ ssr_shader.locs[rl.SHADER_LOC_MATRIX_VIEW] = rl.get_shader_location(
     ssr_shader, "viewMat"
 )
 
-render_target = rl.load_render_texture(320, 240)
-reflect_target = rl.load_render_texture(320, 240)
 skybox = rl.load_model_from_mesh(rl.gen_mesh_cube(1, 1, 1))
 
 water_plane = rl.load_model_from_mesh(rl.gen_mesh_plane(
@@ -54,6 +86,7 @@ water_plane.materials[0].maps[0].texture = reflect_target.texture
 water_plane.materials[0].shader = rl.load_shader("water.vert", "water.frag")
 water_plane.materials[0].shader.locs[rl.SHADER_LOC_MATRIX_MODEL] = rl.get_shader_location(water_plane.materials[0].shader, "matModel")
 water_plane.materials[0].shader.locs[rl.SHADER_LOC_VECTOR_VIEW] = rl.get_shader_location(water_plane.materials[0].shader, "viewPos")
+water_time_loc = rl.get_shader_location(water_plane.materials[0].shader, "time")
 
 skybox.materials[0].shader = rl.load_shader("skybox.vert", "skybox.frag")
 rl.set_shader_value(skybox.materials[0].shader, rl.get_shader_location(skybox.materials[0].shader, "environmentMap"), rl.ffi.new("int*", rl.MATERIAL_MAP_CUBEMAP), rl.SHADER_UNIFORM_INT)
@@ -295,7 +328,7 @@ def render_scene(state, camera, interp_pos, reflected=False):
         rl.draw_mesh(enemyspikes, enemymat, sum(glm.transpose(glm.translate(enemy.pos)
                                                               @ glm.rotate(rl.get_time() * enemy.rate, glm.vec3(0, 0, 1))).to_tuple(), ()))
 
-    rl.draw_sphere_wires(state.died_pos.to_tuple(), PLAYER_RADIUS, 4, 4, rl.WHITE)
+    rl.draw_sphere_wires(state.died_pos.to_tuple(), PLAYER_RADIUS, 4, 4, rl.BLACK)
 
     # rl.draw_grid(50, 2)
 
@@ -304,7 +337,6 @@ def render_scene(state, camera, interp_pos, reflected=False):
             rl.draw_sphere(p.to_tuple(), BULLET_RADIUS, rl.GREEN)
 
     for o in state.obstacles:
-        rl.draw_cube((-8, 4, o.z), 1, 1, 1, rl.RED)
         rl.draw_model(
             obstacle_model,
             (0, OBSTACLE_DEPTH, o.z),
@@ -317,6 +349,7 @@ def render_scene(state, camera, interp_pos, reflected=False):
     #   rl.draw_line_3d((o, -3, state.pos.z), (o, -3, state.pos.z - 40), rl.WHITE)
 
     if not reflected:
+        rl.set_shader_value(water_plane.materials[0].shader, water_time_loc, rl.ffi.new("float *", rl.get_time()), rl.SHADER_UNIFORM_FLOAT)
         rl.draw_model(water_plane, (0, WATER_LEVEL, state.pos.z - 180), 1, rl.color_alpha(rl.BLUE, 0.4))
 
     #rl.draw_plane(
@@ -474,6 +507,13 @@ def update(state):
         rl.SHADER_UNIFORM_VEC3,
     )
 
+    rl.set_shader_value(
+        water_plane.materials[0].shader,
+        water_plane.materials[0].shader.locs[rl.SHADER_LOC_VECTOR_VIEW],
+        rl.ffi.cast("void *", rl.ffi.addressof(cam.position)),
+        rl.SHADER_UNIFORM_VEC3,
+    )
+
     if is_under_water:
         rl.set_shader_value(
             fog_shader,
@@ -573,7 +613,6 @@ def update(state):
     reflect_cam = rl.Camera3D(cam.position, cam.target, cam.up, cam.fovy)
     reflect_cam.position.y = reflect_cam.position.y * -1 + WATER_LEVEL
     reflect_cam.target.y = reflect_cam.target.y * -1 + WATER_LEVEL
-    print(reflect_cam.position.y)
     render_scene(state, reflect_cam, interp_pos, reflected=True)
     rl.end_texture_mode()
 
@@ -585,7 +624,9 @@ def update(state):
     rl.end_texture_mode()
 
     rl.clear_background(rl.BLACK)
+
     rl.begin_shader_mode(psx_shader)
+    #rl.set_shader_value_texture(psx_shader, rl.get_shader_location(psx_shader, "texture1"), render_target.depth)
     rl.draw_texture_pro(
         render_target.texture,
         rl.Rectangle(0, 0, render_target.texture.width, -render_target.texture.height),
