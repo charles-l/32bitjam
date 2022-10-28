@@ -113,6 +113,10 @@ ship = rl.load_model("ship.glb").meshes[0]
 spikeball = rl.load_model("enemy.glb").meshes[0]
 _enemy_model = rl.load_model("enemyship.glb")
 enemyball, enemyspikes = _enemy_model.meshes[1], _enemy_model.meshes[0]
+
+ocean_container = rl.load_model("oceancontainer.glb")
+ocean_container.materials[0] = redmat
+
 gun_sound = rl.load_sound("gun.wav")
 rl.set_sound_volume(gun_sound, 0.3)
 bg = rl.load_music_stream("32bitjam.mp3")
@@ -321,7 +325,11 @@ def render_scene(state, camera, interp_pos, reflected=False):
             )
 
     for p in state.spike_obstacles:
-        rl.draw_mesh(spikeball, redmat, sum(glm.transpose(glm.translate(p)).to_tuple(), ()))
+        if int(rl.get_music_time_played(bg) // (60 / 145) % 4) == 0:
+            scale = 1.1
+        else:
+            scale = 1
+        rl.draw_mesh(spikeball, redmat, sum(glm.transpose(glm.translate(p) @ glm.scale(glm.vec3(scale))).to_tuple(), ()))
 
     for enemy in state.enemies:
         rl.draw_mesh(enemyball, enemymat, sum(glm.transpose(glm.translate(enemy.pos)).to_tuple(), ()))
@@ -349,6 +357,7 @@ def render_scene(state, camera, interp_pos, reflected=False):
     #   rl.draw_line_3d((o, -3, state.pos.z), (o, -3, state.pos.z - 40), rl.WHITE)
 
     if not reflected:
+        rl.draw_model(ocean_container, (0, WATER_LEVEL, state.pos.z), 1, rl.WHITE)
         rl.set_shader_value(water_plane.materials[0].shader, water_time_loc, rl.ffi.new("float *", rl.get_time()), rl.SHADER_UNIFORM_FLOAT)
         rl.draw_model(water_plane, (0, WATER_LEVEL, state.pos.z - 180), 1, rl.color_alpha(rl.BLUE, 0.4))
 
@@ -518,13 +527,13 @@ def update(state):
         rl.set_shader_value(
             fog_shader,
             FOG_DENSITY_LOC,
-            rl.ffi.new("float *", 0.2),
+            rl.ffi.new("float *", 0.4),
             rl.SHADER_UNIFORM_FLOAT,
         )
         rl.set_shader_value(
             fog_shader,
             FOG_COLOR_LOC,
-            rl.ffi.new("float[3]", [0, 0, 1]),
+            rl.ffi.new("float[3]", [12 / 255, 20 / 255, 86 / 255]),
             rl.SHADER_UNIFORM_VEC3,
         )
     else:
@@ -537,7 +546,7 @@ def update(state):
         rl.set_shader_value(
             fog_shader,
             FOG_COLOR_LOC,
-            rl.ffi.new("float[3]", [0.1, 0.1, 0.4]),
+            rl.ffi.new("float[3]", [0.1, 0.1, 0.2]),
             rl.SHADER_UNIFORM_VEC3,
         )
 

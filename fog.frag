@@ -16,5 +16,5 @@ void main() {
     float fogFactor = clamp(1.0/exp((dist*fogDensity)*(dist*fogDensity)), 0.0, 1.0);
 
     vec4 texelColor = texture(texture0, fragTexCoord)*colDiffuse*fragColor;
-    finalColor = mix(vec4(fogColor, 0.1), texelColor, fogFactor);
+    finalColor = mix(vec4(fogColor, 1), texelColor, fogFactor);
 }
