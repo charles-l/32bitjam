@@ -155,11 +155,13 @@ class Enemy:
     lane_i: int
 
 state = Namespace(
+    armor=3,
+    invincible_time=0,
     vel=glm.vec3(0),
     pos=glm.vec3(0),
     died_pos=glm.vec3(),
     pstate="alive",
-    water=0.1,
+    water=0.3,
     bullet_cooldown=0,
     yspring=Spring(2, 0.5, 0, 0),
     rotspring=Spring(1, 0.5, 2, 0),
@@ -182,6 +184,14 @@ state = Namespace(
                       glm.vec3(0, -1, -200),
                       glm.vec3(0, -1, -400)], key=lambda v: v.z),
 )
+
+def reset_level(state):
+    state.pos = glm.vec3(0)
+    state.vel = glm.vec3(0)
+    state.pstate = "alive"
+    state.water = 0.3
+    state.bullet_i = 0
+    state.invincible_time = 0
 
 OBSTACLE_DEPTH = -401
 OBSTACLE_DIMENSIONS = (40, 800, 4)
@@ -309,17 +319,18 @@ def render_scene(state, camera, interp_pos, reflected=False):
 
     if state.pstate == "alive":
         if not reflected or state.pos.y > WATER_LEVEL:
-            rl.draw_mesh(
-                ship,
-                mat,
-                sum(
-                    glm.transpose(
-                        glm.translate(interp_pos)
-                        @ glm.rotate(state.rotspring.y, glm.vec3(0, 0, 1))
-                    ).to_tuple(),
-                    (),
-                ),
-            )
+            if state.invincible_time <= 0 or (state.invincible_time % 0.2 < 0.1):
+                rl.draw_mesh(
+                    ship,
+                    mat,
+                    sum(
+                        glm.transpose(
+                            glm.translate(interp_pos)
+                            @ glm.rotate(state.rotspring.y, glm.vec3(0, 0, 1))
+                        ).to_tuple(),
+                        (),
+                    ),
+                )
 
     for p in state.spike_obstacles:
         if int(rl.get_music_time_played(bg) // (60 / 145) % 4) == 0:
@@ -359,6 +370,13 @@ def render_scene(state, camera, interp_pos, reflected=False):
         rl.set_shader_value(water_plane.materials[0].shader, water_time_loc, rl.ffi.new("float *", rl.get_time()), rl.SHADER_UNIFORM_FLOAT)
         rl.draw_model(water_plane, (0, WATER_LEVEL, state.pos.z - 180), 1, rl.color_alpha(rl.BLUE, 0.4))
 
+    if not reflected:
+        for i in range(20):
+            rl.draw_sphere((-20, WATER_LEVEL, (state.pos.z - 60 + i * 4) // 4 * 4), 0.1, rl.YELLOW)
+            rl.draw_sphere(( 20, WATER_LEVEL, (state.pos.z - 60 + i * 4) // 4 * 4), 0.1, rl.YELLOW)
+
+    rl.draw_sphere
+
     #rl.draw_plane(
     #    glm.vec3(0, WATER_LEVEL, state.pos.z - 170).to_tuple(),
     #    (40, 400),
@@ -380,7 +398,7 @@ def render_scene(state, camera, interp_pos, reflected=False):
             )
 
     for pos, _ in state.water_particles:
-        if not reflected or pos.y > WATER_LEVEL:
+        if not reflected or pos.y > WATER_LEVEL + 1:
             rl.draw_sphere(pos.to_tuple(), 0.3, rl.BLUE)
 
     rl.end_mode_3d()
@@ -423,6 +441,7 @@ def update(state):
     interp_pos = state.pos
 
     waterlog_factor = 1 - (max(state.water - 1.5, 0) * 0.5)
+    state.invincible_time -= rl.get_frame_time()
 
     if state.pstate == "alive":
         state.pos.y = dive
@@ -478,10 +497,15 @@ def update(state):
         state.rotspring.update(rotation)
         state.bullet_cooldown -= rl.get_frame_time()
 
-        if died_pos := collide_with_obstacle(interp_pos, PLAYER_RADIUS):
-            state.pstate = "dead"
-            state.died_pos = died_pos
-            state.explosions.append((died_pos, rl.get_time()))
+        if state.invincible_time < 0:
+            if died_pos := collide_with_obstacle(interp_pos, PLAYER_RADIUS):
+                if state.armor > 1:
+                    state.armor -= 1
+                    state.invincible_time = 3
+                else:
+                    state.pstate = "dead"
+                    state.died_pos = died_pos
+                state.explosions.append((died_pos, rl.get_time()))
 
         if state.water > 2:
             state.pstate = "dead"
@@ -490,10 +514,8 @@ def update(state):
 
     elif state.pstate == "dead":
         if rl.is_key_pressed(rl.KEY_DOWN):
-            state.pos = glm.vec3()
-            state.pstate = "alive"
+            reset_level(state)
             cam.position = (0, 4, 4)
-            state.water = 0
 
     # cam update
     if state.pstate == "alive":
@@ -677,7 +699,19 @@ def update(state):
             SCREEN_WIDTH // 2 + 40,
             SCREEN_HEIGHT // 2 - 20,
             20,
-            rl.GREEN)
+            rl.GRAY)
+        rl.draw_text("ARMR",
+                     SCREEN_WIDTH // 2 + 40,
+                     SCREEN_HEIGHT // 2,
+                     5,
+                     rl.DARKGREEN)
+        for i in range(state.armor):
+            rl.draw_rectangle(
+                SCREEN_WIDTH // 2 + 40 + 31 + i * 15,
+                SCREEN_HEIGHT // 2 + 1,
+                10,
+                7,
+                rl.DARKGREEN)
 
     if state.pstate == "dead":
         rl.draw_text(
@@ -690,6 +724,8 @@ def update(state):
             rl.draw_text("WARNING: WATERLOGGING", x, SCREEN_HEIGHT // 2 - 120, 30, rl.RED)
             if waterlog_factor < 1:
                 rl.draw_text(f"{int((2-state.water)*100)}% capacity", x, SCREEN_HEIGHT // 2 - 90, 30, rl.RED)
+    elif state.water < 0.05:
+        rl.draw_text("WATER LOW - DIVE TO FILL TANK", SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 120, 20, rl.SKYBLUE)
 
 if __name__ == "__main__":
     while not rl.window_should_close():
