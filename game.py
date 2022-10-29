@@ -189,6 +189,7 @@ class Enemy:
     state_time: float
     state = "idle"
 
+
 state = Namespace(
     level=0,
     armor=1,
@@ -206,33 +207,15 @@ state = Namespace(
     bullets_vel=glm.array.zeros(100, glm.vec3),
     enemy_bullets=[],
     bullet_i=0,
-    spike_obstacles=glm.array(
-        sorted(
-            [
-                glm.vec3(random.randrange(-20, 20), 0, random.randrange(-10000, -10))
-                for _ in range(100)
-            ],
-            key=lambda v: v.z,
-        )
-    ),
-    enemies=[
-        Enemy(
-            glm.vec3(0, 10, 0),
-            glm.vec3(),
-            glm.vec3(),
-            (random.random() - 0.5) * 5,
-            i,
-            2 + (random.random()),
-        )
-        for i in range(5)
-    ],
+    spike_obstacles=glm.array.zeros(0, glm.vec3),
+    enemies=[],
     explosions=[],
     water_particles=[],
-    obstacles=sorted(
-        [glm.vec3(0, -1, -100), glm.vec3(0, -1, -400), glm.vec3(0, 1, -600)],
-        key=lambda v: v.z,
-    ),
+    obstacles=[],
     checkpoint_dist=100,
+    checkpoint_time=0,
+    total_time=0,
+    level_time=0,
 )
 
 
@@ -240,41 +223,123 @@ def level_1(state):
     state.spike_obstacles = glm.array(
         sorted(
             [
-                glm.vec3(
-                    random.randrange(-20, 20), 0, random.randrange(-10000, -10)
-                    )
+                glm.vec3(random.randrange(-20, 20), 0, random.randrange(-10000, -10))
                 for _ in range(100)
-                ],
+            ],
             key=lambda v: v.z,
-            )
         )
+    )
     state.obstacles = sorted(
-        [glm.vec3(0, -1, -100), glm.vec3(0, -1, -400), glm.vec3(0, 1, -600)],
+        [glm.vec3(0, -1, -500), glm.vec3(0, -1, -2500), glm.vec3(0, 1, -3400)],
         key=lambda v: v.z,
-        )
-    state.checkpoint_dist = 10000
+    )
+    # state.checkpoint_dist = 10000
+    state.checkpoint_dist = 100
 
-    while state.pos.z < state.checkpoint_dist:
+    while state.pos.z > -state.checkpoint_dist:
         yield
 
-def intermission():
+    global flash
+    flash = 1
+
+
+def level_2(state):
+    state.checkpoint_dist = 10000
+    state.obstacles = sorted(
+        [
+            glm.vec3(0, 1, -500),
+            glm.vec3(0, -1, -200),
+            glm.vec3(0, -1, -2000),
+            glm.vec3(0, -1, -2300),
+            glm.vec3(0, -1, -2600),
+            glm.vec3(0, 1, -3400),
+            glm.vec3(0, 1, -6000),
+        ],
+        key=lambda v: v.z,
+    )
+    state.spike_obstacles = glm.array(
+        sorted(
+            [
+                glm.vec3(random.randrange(-20, 20), 0, random.randrange(-10000, -1000))
+                for _ in range(100)
+            ]
+            + [
+                glm.vec3(random.randrange(-20, 20), 0, random.randrange(-8020, -8000))
+                for _ in range(20)
+            ]
+            + [
+                glm.vec3(random.randrange(-20, 20), 0, random.randrange(-8100, -8080))
+                for _ in range(20)
+            ]
+            + [
+                glm.vec3(random.randrange(-20, 20), 0, random.randrange(-8420, -8400))
+                for _ in range(20)
+            ],
+            key=lambda v: v.z,
+        )
+    )
+
+    while state.pos.z > -500:
+        yield
+
+    state.enemies = [
+        Enemy(
+            glm.vec3(0, 30, -500),
+            glm.vec3(),
+            glm.vec3(),
+            (random.random() - 0.5) * 5,
+            i,
+            2 + (random.random()),
+        )
+        for i in range(5)
+    ]
+
+    while state.pos.z > -6000:
+        yield
+
+    state.enemies = [
+        Enemy(
+            glm.vec3(0, 30, -6020),
+            glm.vec3(),
+            glm.vec3(),
+            (random.random() - 0.5) * 5,
+            i,
+            2 + (random.random()),
+        )
+        for i in range(5)
+    ]
+
+    # state.checkpoint_dist = 10000
+
+    while state.pos.z > -state.checkpoint_dist:
+        yield
+
+
+def intermission(state):
+    level_time_seconds = state.level_time
     state.obstacles = []
     state.enemies = []
     state.spike_obstacles = []
-    level_time_seconds = 40.1
-    state.checkpoint_dist = float('inf')
-    display = 0
+    state.total_time += level_time_seconds
+    state.checkpoint_dist = float("inf")
+    display = 0.0
     while True:
+        state.water = 1
+        rl.draw_rectangle(
+            0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.color_alpha(rl.BLACK, 0.5)
+        )
         if display < level_time_seconds:
             display = min(display + 1, level_time_seconds)
-            text = f'LEVEL TIME: {display}'
+            text = f"LEVEL TIME: {display:.2f}s"
             draw_text_centered(text, 30, rl.WHITE)
             rl.play_sound(click_sound)
             if display == level_time_seconds:
                 rl.play_sound(impact)
         else:
-            draw_text_centered(f'LEVEL TIME: {display}', 40, rl.WHITE)
-            draw_text_centered(f'Hit down arrow to continue', 20, rl.WHITE, y=SCREEN_HEIGHT // 2 + 20)
+            draw_text_centered(f"LEVEL TIME: {display:.2f}s", 40, rl.WHITE)
+            draw_text_centered(
+                f"Hit down arrow to continue", 20, rl.WHITE, y=SCREEN_HEIGHT // 2 + 20
+            )
         if rl.is_key_pressed(rl.KEY_DOWN):
             return
         yield
@@ -282,13 +347,15 @@ def intermission():
 
 low = [0.0, 0.0]
 cutoff = 300.0 / 44100.0
-k = cutoff / (cutoff + 0.1591549431) # RC filter formula
+k = cutoff / (cutoff + 0.1591549431)  # RC filter formula
+
+
 @rl.ffi.callback("void(*)(void *, unsigned int)")
 def lowpass(buffer, frames: int):
     global low
     buffer = rl.ffi.cast("float *", buffer)
 
-    for i in range(0, frames*2, 2):
+    for i in range(0, frames * 2, 2):
         l = buffer[i]
         r = buffer[i + 1]
         low[0] += k * (l - low[0])
@@ -296,24 +363,36 @@ def lowpass(buffer, frames: int):
         buffer[i] = low[0]
         buffer[i + 1] = low[1]
 
-level_coro = level_1(state)
 
 levels = [
     level_1,
-    intermission(),
-    #level_2,
-    #final_boss
-    ]
+    intermission,
+    level_2,
+    intermission,
+    # level_3,
+]
 
+level_coro = levels[0](state)
 
 
 def reset_level(state):
+    global cam, level_coro
+    cam.position = (0, 0, 0)
+    state.camspring.x = glm.vec3(0)
+    state.enemies = []
+    state.camspring.xp = glm.vec3(0)
+    state.camspring.y = glm.vec3(0)
+    state.camspring.yd = glm.vec3(0)
     state.pos = glm.vec3(0)
     state.vel = glm.vec3(0)
     state.pstate = "alive"
     state.water = 0.3
     state.bullet_i = 0
     state.invincible_time = 0
+    rll.DetachAudioStreamProcessor(bg.stream, lowpass)
+    level_coro = levels[state.level](state)
+    next(level_coro)
+    state.level_time = 0
 
 
 PLAYER_RADIUS = 0.5
@@ -614,8 +693,12 @@ def render_scene(state, camera, interp_pos, reflected=False):
 
 
 flash = 0
+
+
 def update(state):
     global flash
+
+    state.level_time += rl.get_frame_time()
 
     rl.update_music_stream(bg)
 
@@ -655,9 +738,6 @@ def update(state):
     state.invincible_time -= rl.get_frame_time()
 
     if state.pstate == "alive":
-        if state.pos.z < -state.checkpoint_dist:
-            flash = 1
-            state.pos = glm.vec3(0)
         state.pos.y = dive
         interp_pos = glm.vec3(state.pos.x, state.yspring.update(dive), state.pos.z)
         if rl.is_key_down(rl.KEY_SPACE):
@@ -749,7 +829,6 @@ def update(state):
         rll.AttachAudioStreamProcessor(bg.stream, lowpass)
     if is_under_water_pre and not is_under_water:
         rll.DetachAudioStreamProcessor(bg.stream, lowpass)
-
 
     rl.set_shader_value(
         fog_shader,
@@ -913,7 +992,9 @@ def update(state):
         rl.SKYBLUE if is_under_water else rl.WHITE,
     )
     if flash > 0:
-        rl.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.color_alpha(rl.WHITE, flash))
+        rl.draw_rectangle(
+            0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.color_alpha(rl.WHITE, flash)
+        )
         flash -= rl.get_frame_time()
     rl.end_shader_mode()
 
@@ -1003,12 +1084,15 @@ def update(state):
 
     # level management
     global level_coro
-    if level_coro:
-        try:
-            next(level_coro)
-        except StopIteration:
-            state.level += 1
-            level_coro = levels[state.level](state)
+    try:
+        next(level_coro)
+    except StopIteration:
+        state.level += 1
+        reset_level(state)
+    rl.draw_fps(10, 10)
+
+    if rl.is_key_pressed(rl.KEY_D):
+        breakpoint()
 
 
 if __name__ == "__main__":
