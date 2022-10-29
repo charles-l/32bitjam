@@ -322,6 +322,7 @@ def intermission(state):
     state.spike_obstacles = []
     state.total_time += level_time_seconds
     state.checkpoint_dist = float("inf")
+    state.armor += 1
     display = 0.0
     while True:
         state.water = 1
@@ -337,6 +338,8 @@ def intermission(state):
                 rl.play_sound(impact)
         else:
             draw_text_centered(f"LEVEL TIME: {display:.2f}s", 40, rl.WHITE)
+            if rl.get_time() % 0.8 < 0.6:
+                draw_text_centered(f"REWARD: +1 ARMR", 40, rl.GREEN, y=SCREEN_HEIGHT//2 + 40)
             draw_text_centered(
                 f"Hit down arrow to continue", 20, rl.WHITE, y=SCREEN_HEIGHT // 2 + 20
             )
