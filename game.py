@@ -155,7 +155,7 @@ class Enemy:
     lane_i: int
 
 state = Namespace(
-    armor=3,
+    armor=1,
     invincible_time=0,
     vel=glm.vec3(0),
     pos=glm.vec3(0),
@@ -181,7 +181,8 @@ state = Namespace(
     explosions=[],
     water_particles=[],
     obstacles=sorted([glm.vec3(0, -1, -100),
-                      glm.vec3(0, -1, -200),
+                      glm.vec3(0, 0, -200),
+                      glm.vec3(0, 0, -300),
                       glm.vec3(0, -1, -400)], key=lambda v: v.z),
 )
 
@@ -193,35 +194,59 @@ def reset_level(state):
     state.bullet_i = 0
     state.invincible_time = 0
 
-OBSTACLE_DEPTH = -401
-OBSTACLE_DIMENSIONS = (40, 800, 4)
 PLAYER_RADIUS = 0.5
 ENEMY_RADIUS = 1
 BULLET_RADIUS = 0.1
 
-obstacle_model = rl.load_model_from_mesh(rl.gen_mesh_cube(*OBSTACLE_DIMENSIONS))
-obstacle_model.materials[0].shader = rl.load_shader("obstacle.vert", "obstacle.frag")
-obstacle_model.materials[0].shader.locs[rl.SHADER_LOC_MATRIX_MODEL] = rl.get_shader_location(
-    obstacle_model.materials[0].shader, "matModel"
-)
-is_reflection_loc = rl.get_shader_location(
-    obstacle_model.materials[0].shader, "isReflection"
-    )
+MID_OBSTACLE_DIMENSIONS = (40, 2, 4)
+
+def obstacle_bounding_box(y, z):
+    if y == -1:
+        LOW_OBSTACLE_DIMENSIONS = (40, 800, 4)
+        return rl.BoundingBox(
+            rl.Vector3(
+                -20,
+                -800,
+                -LOW_OBSTACLE_DIMENSIONS[2] / 2 + z,
+            ),
+            rl.Vector3(
+                20,
+                -1,
+                LOW_OBSTACLE_DIMENSIONS[2] / 2 + z,
+            ),
+        )
+    elif y == 0:
+        return rl.BoundingBox(
+            rl.Vector3(
+                -20,
+                WATER_LEVEL,
+                -2 + z),
+            rl.Vector3(
+                20,
+                1,
+                2 + z))
+
+def depth_from_bb(bb):
+    return bb.min.y + (bb.max.y - bb.min.y) / 2
 
 
-def obstacle_bounding_box(z):
-    return rl.BoundingBox(
-        rl.Vector3(
-            -OBSTACLE_DIMENSIONS[0] / 2,
-            -OBSTACLE_DIMENSIONS[1] / 2 + OBSTACLE_DEPTH,
-            -OBSTACLE_DIMENSIONS[2] / 2 + z,
-        ),
-        rl.Vector3(
-            OBSTACLE_DIMENSIONS[0] / 2,
-            OBSTACLE_DIMENSIONS[1] / 2 + OBSTACLE_DEPTH,
-            OBSTACLE_DIMENSIONS[2] / 2 + z,
-        ),
+def gen_cube_from_bb(bb):
+    return rl.gen_mesh_cube(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z)
+
+obstacle_models = {
+    -1.0: rl.load_model_from_mesh(gen_cube_from_bb(obstacle_bounding_box(-1, 0))),
+    0.0: rl.load_model_from_mesh(gen_cube_from_bb(obstacle_bounding_box(0, 0))),
+    }
+obstacle_shader = rl.load_shader("obstacle.vert", "obstacle.frag")
+for obstacle_model in obstacle_models.values():
+    obstacle_model.materials[0].shader = obstacle_shader
+    obstacle_shader.locs[rl.SHADER_LOC_MATRIX_MODEL] = rl.get_shader_location(
+        obstacle_model.materials[0].shader, "matModel"
     )
+obstacle_models[-1.0].materials[0].maps[0].color = rl.DARKGRAY
+obstacle_models[0.0].materials[0].maps[0].color = rl.GRAY
+is_reflection_loc = rl.get_shader_location(obstacle_shader, "isReflection")
+
 
 GRID_SIZE = 8
 
@@ -283,11 +308,12 @@ def collide_with_obstacle(pos, radius, kill=True):
 
     for p in z_near(state.obstacles, pos.z, radius + 4):
         if rl.check_collision_box_sphere(
-            obstacle_bounding_box(pos.z),
+            obstacle_bounding_box(p.y, p.z),
             pos.to_tuple(),
             PLAYER_RADIUS,
         ):
-            return glm.vec3(pos.xy, p.z + OBSTACLE_DIMENSIONS[2] / 2 + 0.1)
+            return glm.vec3(pos.xy, obstacle_bounding_box(p.y, p.z).max.z + 0.1)
+
 
     return None
 
@@ -303,14 +329,14 @@ def render_scene(state, camera, interp_pos, reflected=False):
 
     if reflected:
         rl.set_shader_value(
-            obstacle_model.materials[0].shader,
+            obstacle_shader,
             is_reflection_loc,
             rl.ffi.new("int *", 1),
             rl.SHADER_UNIFORM_INT,
         )
     else:
         rl.set_shader_value(
-            obstacle_model.materials[0].shader,
+            obstacle_shader,
             is_reflection_loc,
             rl.ffi.new("int *", 0),
             rl.SHADER_UNIFORM_INT,
@@ -355,8 +381,8 @@ def render_scene(state, camera, interp_pos, reflected=False):
 
     for o in state.obstacles:
         rl.draw_model(
-            obstacle_model,
-            (0, OBSTACLE_DEPTH, o.z),
+            obstacle_models[o.y],
+            (0, depth_from_bb(obstacle_bounding_box(o.y, 0)), o.z),
             1,
             rl.WHITE,
         )
@@ -398,7 +424,7 @@ def render_scene(state, camera, interp_pos, reflected=False):
             )
 
     for pos, _ in state.water_particles:
-        if not reflected or pos.y > WATER_LEVEL + 1:
+        if not reflected or pos.y > WATER_LEVEL:
             rl.draw_sphere(pos.to_tuple(), 0.3, rl.BLUE)
 
     rl.end_mode_3d()
@@ -501,7 +527,7 @@ def update(state):
             if died_pos := collide_with_obstacle(interp_pos, PLAYER_RADIUS):
                 if state.armor > 1:
                     state.armor -= 1
-                    state.invincible_time = 3
+                    state.invincible_time = 2
                 else:
                     state.pstate = "dead"
                     state.died_pos = died_pos
@@ -640,8 +666,8 @@ def update(state):
     rl.clear_background(rl.BLACK)
 
     reflect_cam = rl.Camera3D(cam.position, cam.target, cam.up, cam.fovy)
-    reflect_cam.position.y = reflect_cam.position.y * -1 + WATER_LEVEL
-    reflect_cam.target.y = reflect_cam.target.y * -1 + WATER_LEVEL
+    reflect_cam.position.y = -cam.position.y + WATER_LEVEL * 2
+    reflect_cam.target.y = -cam.target.y + WATER_LEVEL * 2
     render_scene(state, reflect_cam, interp_pos, reflected=True)
     rl.end_texture_mode()
 
@@ -683,7 +709,7 @@ def update(state):
             0,
             360 / (1 / water) if water > 0 else 0,
             16,
-            rl.SKYBLUE,
+            rl.BLUE,
         )
         rl.draw_ring(
             (SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 40),
@@ -705,13 +731,22 @@ def update(state):
                      SCREEN_HEIGHT // 2,
                      5,
                      rl.DARKGREEN)
-        for i in range(state.armor):
-            rl.draw_rectangle(
-                SCREEN_WIDTH // 2 + 40 + 31 + i * 15,
-                SCREEN_HEIGHT // 2 + 1,
-                10,
-                7,
-                rl.DARKGREEN)
+        for i in range(3):
+            if state.armor > i:
+                rl.draw_rectangle(
+                    SCREEN_WIDTH // 2 + 40 + 31 + i * 15,
+                    SCREEN_HEIGHT // 2 + 1,
+                    10,
+                    7,
+                    rl.DARKGREEN)
+            else:
+                rl.draw_rectangle(
+                    SCREEN_WIDTH // 2 + 40 + 31 + i * 15,
+                    SCREEN_HEIGHT // 2 + 1,
+                    10,
+                    7,
+                    rl.color_alpha(rl.DARKGREEN, 0.2))
+
 
     if state.pstate == "dead":
         rl.draw_text(
@@ -721,11 +756,11 @@ def update(state):
     if state.water - 1 > 0.1:
         if (rl.get_time() % 0.4) < 0.2:
             x = SCREEN_WIDTH // 2 + 40
-            rl.draw_text("WARNING: WATERLOGGING", x, SCREEN_HEIGHT // 2 - 120, 30, rl.RED)
+            rl.draw_text("WARNING: WATERLOGGED", x, SCREEN_HEIGHT // 2 - 120, 30, rl.RED)
             if waterlog_factor < 1:
                 rl.draw_text(f"{int((2-state.water)*100)}% capacity", x, SCREEN_HEIGHT // 2 - 90, 30, rl.RED)
     elif state.water < 0.05:
-        rl.draw_text("WATER LOW - DIVE TO FILL TANK", SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 120, 20, rl.SKYBLUE)
+        rl.draw_text("WATER LOW - DIVE TO FILL TANK", SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 120, 20, rl.BLUE)
 
 if __name__ == "__main__":
     while not rl.window_should_close():
