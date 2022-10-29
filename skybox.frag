@@ -1,22 +1,24 @@
 #version 330
 
 // Input vertex attributes (from vertex shader)
-in vec3 fragPosition;
+in vec2 fragTexCoord;
+in vec4 fragColor;
 
 // Input uniform values
-uniform samplerCube environmentMap;
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
 
 // Output fragment color
 out vec4 finalColor;
 
+// NOTE: Add here your custom variables
+
 void main()
 {
-    // Fetch color from texture map
-    vec3 color = texture(environmentMap, fragPosition).rgb;
+    // Texel color fetching from texture sampler
+    vec4 texelColor = texture(texture0, fragTexCoord);
 
-    //color = color/(color + vec3(1.0));
-    //color = pow(color, vec3(1.0/2.2));
+    // NOTE: Implement here your fragment shader code
 
-    // Calculate final fragment color
-    finalColor = vec4(color, 1.0);
+    finalColor = texelColor*colDiffuse;
 }

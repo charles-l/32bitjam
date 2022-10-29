@@ -76,7 +76,7 @@ ssr_shader.locs[rl.SHADER_LOC_MATRIX_VIEW] = rl.get_shader_location(
     ssr_shader, "viewMat"
 )
 
-skybox = rl.load_model_from_mesh(rl.gen_mesh_cube(1, 1, 1))
+skydome = rl.load_model("sky.glb")
 
 water_plane = rl.load_model_from_mesh(rl.gen_mesh_plane(
     400, 400,
@@ -88,11 +88,8 @@ water_plane.materials[0].shader.locs[rl.SHADER_LOC_MATRIX_MODEL] = rl.get_shader
 water_plane.materials[0].shader.locs[rl.SHADER_LOC_VECTOR_VIEW] = rl.get_shader_location(water_plane.materials[0].shader, "viewPos")
 water_time_loc = rl.get_shader_location(water_plane.materials[0].shader, "time")
 
-skybox.materials[0].shader = rl.load_shader("skybox.vert", "skybox.frag")
-rl.set_shader_value(skybox.materials[0].shader, rl.get_shader_location(skybox.materials[0].shader, "environmentMap"), rl.ffi.new("int*", rl.MATERIAL_MAP_CUBEMAP), rl.SHADER_UNIFORM_INT)
-
-skybox_tex = rl.load_image("skybox.png")
-skybox.materials[0].maps[rl.MATERIAL_MAP_CUBEMAP].texture = rl.load_texture_cubemap(skybox_tex, rl.CUBEMAP_LAYOUT_AUTO_DETECT)
+skydome.materials[0].shader = rl.load_shader("skybox.vert", "skybox.frag")
+skydome.materials[0].maps[0].texture = rl.load_texture("sky.png")
 
 tex = rl.load_texture("texture_06.png")
 explosion_sheet = rl.load_texture("explosion_sheet.png")
@@ -290,7 +287,7 @@ def render_scene(state, camera, interp_pos, reflected=False):
 
     rll.rlDisableBackfaceCulling()
     rll.rlDisableDepthMask()
-    rl.draw_model(skybox, (0, 0, 0), 1, rl.WHITE)
+    rl.draw_model(skydome, (0, 0, 0), 1, rl.WHITE)
     rll.rlEnableBackfaceCulling()
     rll.rlEnableDepthMask()
 
@@ -336,7 +333,8 @@ def render_scene(state, camera, interp_pos, reflected=False):
         rl.draw_mesh(enemyspikes, enemymat, sum(glm.transpose(glm.translate(enemy.pos)
                                                               @ glm.rotate(rl.get_time() * enemy.rate, glm.vec3(0, 0, 1))).to_tuple(), ()))
 
-    rl.draw_sphere_wires(state.died_pos.to_tuple(), PLAYER_RADIUS, 4, 4, rl.BLACK)
+    if state.died_pos != glm.vec3(0):
+        rl.draw_sphere_wires(state.died_pos.to_tuple(), PLAYER_RADIUS, 4, 4, rl.BLACK)
 
     # rl.draw_grid(50, 2)
 
@@ -626,7 +624,7 @@ def update(state):
     rl.end_texture_mode()
 
     rl.begin_texture_mode(render_target)
-    rl.clear_background(rl.GRAY)
+    rl.clear_background(rl.PURPLE)
 
     render_scene(state, cam, interp_pos)
 

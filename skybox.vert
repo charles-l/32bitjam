@@ -2,6 +2,7 @@
 
 // Input vertex attributes
 in vec3 vertexPosition;
+in vec2 vertexTexCoord;
 
 // Input uniform values
 uniform mat4 matProjection;
@@ -9,11 +10,13 @@ uniform mat4 matView;
 
 // Output vertex attributes (to fragment shader)
 out vec3 fragPosition;
+out vec2 fragTexCoord;
 
 void main()
 {
     // Calculate fragment position based on model transformations
     fragPosition = vertexPosition;
+    fragTexCoord = vertexTexCoord;
 
     // Remove translation from the view matrix
     mat4 rotView = mat4(mat3(matView));
