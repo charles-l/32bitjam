@@ -1,5 +1,4 @@
 import pyray as rl
-
 import raylib as rll
 import bisect
 import functools
@@ -12,6 +11,15 @@ import glm
 SCREEN_WIDTH = 320 * 3
 SCREEN_HEIGHT = 240 * 3
 
+
+def draw_text_centered(text, font_size, color, x=None, y=None):
+    if x is None:
+        x = SCREEN_WIDTH // 2 - rl.measure_text(text, font_size) // 2
+    if y is None:
+        y = SCREEN_HEIGHT // 2 - font_size // 2
+    rl.draw_text(text, x, y, font_size, color)
+
+
 def load_render_texture_with_depth(width, height):
     target = rl.RenderTexture()
     target.id = rll.rlLoadFramebuffer(width, height)
@@ -19,7 +27,9 @@ def load_render_texture_with_depth(width, height):
 
     rll.rlEnableFramebuffer(target.id)
 
-    target.texture.id = rll.rlLoadTexture(rl.ffi.NULL, width, height, rll.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1)
+    target.texture.id = rll.rlLoadTexture(
+        rl.ffi.NULL, width, height, rll.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1
+    )
     target.texture.width = width
     target.texture.height = height
     target.texture.format = rll.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8
@@ -31,15 +41,26 @@ def load_render_texture_with_depth(width, height):
     target.depth.format = 19
     target.depth.mipmaps = 1
 
-    rll.rlFramebufferAttach(target.id, target.texture.id, rll.RL_ATTACHMENT_COLOR_CHANNEL0, rll.RL_ATTACHMENT_TEXTURE2D, 0)
-    rll.rlFramebufferAttach(target.id, target.depth.id, rll.RL_ATTACHMENT_DEPTH, rll.RL_ATTACHMENT_TEXTURE2D, 0)
+    rll.rlFramebufferAttach(
+        target.id,
+        target.texture.id,
+        rll.RL_ATTACHMENT_COLOR_CHANNEL0,
+        rll.RL_ATTACHMENT_TEXTURE2D,
+        0,
+    )
+    rll.rlFramebufferAttach(
+        target.id,
+        target.depth.id,
+        rll.RL_ATTACHMENT_DEPTH,
+        rll.RL_ATTACHMENT_TEXTURE2D,
+        0,
+    )
 
     assert rll.rlFramebufferComplete(target.id)
 
     rll.rlDisableFramebuffer()
 
     return target
-
 
 
 if __name__ == "__main__":
@@ -77,15 +98,24 @@ ssr_shader.locs[rl.SHADER_LOC_MATRIX_VIEW] = rl.get_shader_location(
 )
 
 skydome = rl.load_model("sky.glb")
+checkpoint_model = rl.load_model("checkpoint.glb")
 
-water_plane = rl.load_model_from_mesh(rl.gen_mesh_plane(
-    400, 400,
-    1, 1,
-    ))
+water_plane = rl.load_model_from_mesh(
+    rl.gen_mesh_plane(
+        400,
+        400,
+        1,
+        1,
+    )
+)
 water_plane.materials[0].maps[0].texture = reflect_target.texture
 water_plane.materials[0].shader = rl.load_shader("water.vert", "water.frag")
-water_plane.materials[0].shader.locs[rl.SHADER_LOC_MATRIX_MODEL] = rl.get_shader_location(water_plane.materials[0].shader, "matModel")
-water_plane.materials[0].shader.locs[rl.SHADER_LOC_VECTOR_VIEW] = rl.get_shader_location(water_plane.materials[0].shader, "viewPos")
+water_plane.materials[0].shader.locs[
+    rl.SHADER_LOC_MATRIX_MODEL
+] = rl.get_shader_location(water_plane.materials[0].shader, "matModel")
+water_plane.materials[0].shader.locs[
+    rl.SHADER_LOC_VECTOR_VIEW
+] = rl.get_shader_location(water_plane.materials[0].shader, "viewPos")
 water_time_loc = rl.get_shader_location(water_plane.materials[0].shader, "time")
 
 skydome.materials[0].shader = rl.load_shader("skybox.vert", "skybox.frag")
@@ -115,8 +145,11 @@ ocean_container = rl.load_model("oceancontainer.glb")
 ocean_container.materials[0] = redmat
 
 gun_sound = rl.load_sound("gun.wav")
+click_sound = rl.load_sound("click.wav")
+impact = rl.load_sound("impact.wav")
 rl.set_sound_volume(gun_sound, 0.3)
 bg = rl.load_music_stream("32bitjam.mp3")
+
 rl.play_music_stream(bg)
 
 WATER_LEVEL = -2
@@ -153,8 +186,11 @@ class Enemy:
     goal_pos: glm.vec3
     rate: float
     lane_i: int
+    state_time: float
+    state = "idle"
 
 state = Namespace(
+    level=0,
     armor=1,
     invincible_time=0,
     vel=glm.vec3(0),
@@ -168,23 +204,108 @@ state = Namespace(
     camspring=Spring(0.1, 10, 2, glm.vec3(0, 8, 4)),
     bullets_pos=glm.array.zeros(100, glm.vec3),
     bullets_vel=glm.array.zeros(100, glm.vec3),
+    enemy_bullets=[],
     bullet_i=0,
     spike_obstacles=glm.array(
-        sorted([
-            glm.vec3(random.randrange(-20, 20), 0, random.randrange(-10000, -10))
-            for _ in range(100)
-            ], key=lambda v: v.z)
+        sorted(
+            [
+                glm.vec3(random.randrange(-20, 20), 0, random.randrange(-10000, -10))
+                for _ in range(100)
+            ],
+            key=lambda v: v.z,
+        )
     ),
     enemies=[
-        Enemy(glm.vec3(0, 10, 0), glm.vec3(), glm.vec3(), (random.random() - 0.5) * 5, i) for i in range(5)
-        ],
+        Enemy(
+            glm.vec3(0, 10, 0),
+            glm.vec3(),
+            glm.vec3(),
+            (random.random() - 0.5) * 5,
+            i,
+            2 + (random.random()),
+        )
+        for i in range(5)
+    ],
     explosions=[],
     water_particles=[],
-    obstacles=sorted([glm.vec3(0, -1, -100),
-                      glm.vec3(0, 0, -200),
-                      glm.vec3(0, 0, -300),
-                      glm.vec3(0, -1, -400)], key=lambda v: v.z),
+    obstacles=sorted(
+        [glm.vec3(0, -1, -100), glm.vec3(0, -1, -400), glm.vec3(0, 1, -600)],
+        key=lambda v: v.z,
+    ),
+    checkpoint_dist=100,
 )
+
+
+def level_1(state):
+    state.spike_obstacles = glm.array(
+        sorted(
+            [
+                glm.vec3(
+                    random.randrange(-20, 20), 0, random.randrange(-10000, -10)
+                    )
+                for _ in range(100)
+                ],
+            key=lambda v: v.z,
+            )
+        )
+    state.obstacles = sorted(
+        [glm.vec3(0, -1, -100), glm.vec3(0, -1, -400), glm.vec3(0, 1, -600)],
+        key=lambda v: v.z,
+        )
+    state.checkpoint_dist = 10000
+
+    while state.pos.z < state.checkpoint_dist:
+        yield
+
+def intermission():
+    state.obstacles = []
+    state.enemies = []
+    state.spike_obstacles = []
+    level_time_seconds = 40.1
+    state.checkpoint_dist = float('inf')
+    display = 0
+    while True:
+        if display < level_time_seconds:
+            display = min(display + 1, level_time_seconds)
+            text = f'LEVEL TIME: {display}'
+            draw_text_centered(text, 30, rl.WHITE)
+            rl.play_sound(click_sound)
+            if display == level_time_seconds:
+                rl.play_sound(impact)
+        else:
+            draw_text_centered(f'LEVEL TIME: {display}', 40, rl.WHITE)
+            draw_text_centered(f'Hit down arrow to continue', 20, rl.WHITE, y=SCREEN_HEIGHT // 2 + 20)
+        if rl.is_key_pressed(rl.KEY_DOWN):
+            return
+        yield
+
+
+low = [0.0, 0.0]
+cutoff = 300.0 / 44100.0
+k = cutoff / (cutoff + 0.1591549431) # RC filter formula
+@rl.ffi.callback("void(*)(void *, unsigned int)")
+def lowpass(buffer, frames: int):
+    global low
+    buffer = rl.ffi.cast("float *", buffer)
+
+    for i in range(0, frames*2, 2):
+        l = buffer[i]
+        r = buffer[i + 1]
+        low[0] += k * (l - low[0])
+        low[1] += k * (r - low[1])
+        buffer[i] = low[0]
+        buffer[i + 1] = low[1]
+
+level_coro = level_1(state)
+
+levels = [
+    level_1,
+    intermission(),
+    #level_2,
+    #final_boss
+    ]
+
+
 
 def reset_level(state):
     state.pos = glm.vec3(0)
@@ -194,11 +315,11 @@ def reset_level(state):
     state.bullet_i = 0
     state.invincible_time = 0
 
+
 PLAYER_RADIUS = 0.5
 ENEMY_RADIUS = 1
 BULLET_RADIUS = 0.1
 
-MID_OBSTACLE_DIMENSIONS = (40, 2, 4)
 
 def obstacle_bounding_box(y, z):
     if y == -1:
@@ -217,26 +338,27 @@ def obstacle_bounding_box(y, z):
         )
     elif y == 0:
         return rl.BoundingBox(
-            rl.Vector3(
-                -20,
-                WATER_LEVEL,
-                -2 + z),
-            rl.Vector3(
-                20,
-                1,
-                2 + z))
+            rl.Vector3(-20, WATER_LEVEL, -2 + z), rl.Vector3(20, 1, 2 + z)
+        )
+    elif y == 1:
+        return rl.BoundingBox(rl.Vector3(-20, 2, -2 + z), rl.Vector3(20, 10, 2 + z))
+
 
 def depth_from_bb(bb):
     return bb.min.y + (bb.max.y - bb.min.y) / 2
 
 
 def gen_cube_from_bb(bb):
-    return rl.gen_mesh_cube(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z)
+    return rl.gen_mesh_cube(
+        bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z
+    )
+
 
 obstacle_models = {
     -1.0: rl.load_model_from_mesh(gen_cube_from_bb(obstacle_bounding_box(-1, 0))),
     0.0: rl.load_model_from_mesh(gen_cube_from_bb(obstacle_bounding_box(0, 0))),
-    }
+    1.0: rl.load_model_from_mesh(gen_cube_from_bb(obstacle_bounding_box(1, 0))),
+}
 obstacle_shader = rl.load_shader("obstacle.vert", "obstacle.frag")
 for obstacle_model in obstacle_models.values():
     obstacle_model.materials[0].shader = obstacle_shader
@@ -245,6 +367,7 @@ for obstacle_model in obstacle_models.values():
     )
 obstacle_models[-1.0].materials[0].maps[0].color = rl.DARKGRAY
 obstacle_models[0.0].materials[0].maps[0].color = rl.GRAY
+obstacle_models[1.0].materials[0].maps[0].color = rl.WHITE
 is_reflection_loc = rl.get_shader_location(obstacle_shader, "isReflection")
 
 
@@ -293,6 +416,7 @@ def reinit(nstate):
         if glm.length2(p) != 0:
             spatial_hash[glm.round(p / 10)]
 
+
 def z_near(arr, z, depth, key=lambda v: v.z):
     """Assumes arr is sorted in ascending order. Searches for elements in
     range `z - depth` to `z + depth`"""
@@ -301,19 +425,22 @@ def z_near(arr, z, depth, key=lambda v: v.z):
     return arr[i:j]
 
 
-def collide_with_obstacle(pos, radius, kill=True):
+def collide_with_obstacle(state, pos, radius):
     for e in z_near(state.spike_obstacles, pos.z, radius + 2):
         if glm.distance(e, pos) < 2 + radius:
+            return pos
+
+    for p in state.enemy_bullets:
+        if glm.distance(p, pos) < BULLET_RADIUS + radius:
             return pos
 
     for p in z_near(state.obstacles, pos.z, radius + 4):
         if rl.check_collision_box_sphere(
             obstacle_bounding_box(p.y, p.z),
             pos.to_tuple(),
-            PLAYER_RADIUS,
+            radius,
         ):
             return glm.vec3(pos.xy, obstacle_bounding_box(p.y, p.z).max.z + 0.1)
-
 
     return None
 
@@ -342,7 +469,6 @@ def render_scene(state, camera, interp_pos, reflected=False):
             rl.SHADER_UNIFORM_INT,
         )
 
-
     if state.pstate == "alive":
         if not reflected or state.pos.y > WATER_LEVEL:
             if state.invincible_time <= 0 or (state.invincible_time % 0.2 < 0.1):
@@ -359,16 +485,56 @@ def render_scene(state, camera, interp_pos, reflected=False):
                 )
 
     for p in state.spike_obstacles:
-        if int(rl.get_music_time_played(bg) // (60 / 145) % 4) == 0:
+        bpm = 145
+        if int(rl.get_music_time_played(bg) // (60 / bpm) % 4) == 0:
             scale = 1.1
         else:
             scale = 1
-        rl.draw_mesh(spikeball, redmat, sum(glm.transpose(glm.translate(p) @ glm.scale(glm.vec3(scale))).to_tuple(), ()))
+        rl.draw_mesh(
+            spikeball,
+            redmat,
+            sum(
+                glm.transpose(glm.translate(p) @ glm.scale(glm.vec3(scale))).to_tuple(),
+                (),
+            ),
+        )
 
     for enemy in state.enemies:
-        rl.draw_mesh(enemyball, enemymat, sum(glm.transpose(glm.translate(enemy.pos)).to_tuple(), ()))
-        rl.draw_mesh(enemyspikes, enemymat, sum(glm.transpose(glm.translate(enemy.pos)
-                                                              @ glm.rotate(rl.get_time() * enemy.rate, glm.vec3(0, 0, 1))).to_tuple(), ()))
+        if enemy.state == "idle":
+            rl.draw_mesh(
+                enemyball,
+                enemymat,
+                sum(glm.transpose(glm.translate(enemy.pos)).to_tuple(), ()),
+            )
+            rl.draw_mesh(
+                enemyspikes,
+                enemymat,
+                sum(
+                    glm.transpose(
+                        glm.translate(enemy.pos)
+                        @ glm.rotate(rl.get_time() * enemy.rate, glm.vec3(0, 0, 1))
+                    ).to_tuple(),
+                    (),
+                ),
+            )
+        elif enemy.state == "attack":
+            rl.draw_mesh(
+                enemyball,
+                enemymat,
+                sum(glm.transpose(glm.translate(enemy.pos)).to_tuple(), ()),
+            )
+            rl.draw_mesh(
+                enemyspikes,
+                redmat,
+                sum(
+                    glm.transpose(
+                        glm.translate(enemy.pos) @ glm.scale(glm.vec3(2))
+                    ).to_tuple(),
+                    (),
+                ),
+            )
+        else:
+            assert False
 
     if state.died_pos != glm.vec3(0):
         rl.draw_sphere_wires(state.died_pos.to_tuple(), PLAYER_RADIUS, 4, 4, rl.BLACK)
@@ -378,6 +544,9 @@ def render_scene(state, camera, interp_pos, reflected=False):
     for p in state.bullets_pos:
         if glm.length2(p) != 0:
             rl.draw_sphere(p.to_tuple(), BULLET_RADIUS, rl.GREEN)
+
+    for p in state.enemy_bullets:
+        rl.draw_sphere(p.to_tuple(), BULLET_RADIUS * 3, rl.RED)
 
     for o in state.obstacles:
         rl.draw_model(
@@ -393,21 +562,33 @@ def render_scene(state, camera, interp_pos, reflected=False):
 
     if not reflected:
         rl.draw_model(ocean_container, (0, WATER_LEVEL, state.pos.z), 1, rl.WHITE)
-        rl.set_shader_value(water_plane.materials[0].shader, water_time_loc, rl.ffi.new("float *", rl.get_time()), rl.SHADER_UNIFORM_FLOAT)
-        rl.draw_model(water_plane, (0, WATER_LEVEL, state.pos.z - 180), 1, rl.color_alpha(rl.BLUE, 0.4))
+        rl.set_shader_value(
+            water_plane.materials[0].shader,
+            water_time_loc,
+            rl.ffi.new("float *", rl.get_time()),
+            rl.SHADER_UNIFORM_FLOAT,
+        )
+        rl.draw_model(
+            water_plane,
+            (0, WATER_LEVEL, state.pos.z - 180),
+            1,
+            rl.color_alpha(rl.BLUE, 0.4),
+        )
 
     if not reflected:
         for i in range(20):
-            rl.draw_sphere((-20, WATER_LEVEL, (state.pos.z - 60 + i * 4) // 4 * 4), 0.1, rl.YELLOW)
-            rl.draw_sphere(( 20, WATER_LEVEL, (state.pos.z - 60 + i * 4) // 4 * 4), 0.1, rl.YELLOW)
+            rl.draw_sphere(
+                (-20, WATER_LEVEL, (state.pos.z - 60 + i * 4) // 4 * 4), 0.1, rl.YELLOW
+            )
+            rl.draw_sphere(
+                (20, WATER_LEVEL, (state.pos.z - 60 + i * 4) // 4 * 4), 0.1, rl.YELLOW
+            )
 
-    rl.draw_sphere
-
-    #rl.draw_plane(
+    # rl.draw_plane(
     #    glm.vec3(0, WATER_LEVEL, state.pos.z - 170).to_tuple(),
     #    (40, 400),
     #    rl.color_alpha(rl.BLUE, 0.3),
-    #)
+    # )
 
     for i, (pos, init_time) in enumerate(state.explosions):
         frame = int((rl.get_time() - init_time) / 0.04)
@@ -427,10 +608,14 @@ def render_scene(state, camera, interp_pos, reflected=False):
         if not reflected or pos.y > WATER_LEVEL:
             rl.draw_sphere(pos.to_tuple(), 0.3, rl.BLUE)
 
+    rl.draw_model(checkpoint_model, (0, 0, -state.checkpoint_dist), 1, rl.WHITE)
+
     rl.end_mode_3d()
 
 
+flash = 0
 def update(state):
+    global flash
 
     rl.update_music_stream(bg)
 
@@ -470,14 +655,17 @@ def update(state):
     state.invincible_time -= rl.get_frame_time()
 
     if state.pstate == "alive":
+        if state.pos.z < -state.checkpoint_dist:
+            flash = 1
+            state.pos = glm.vec3(0)
         state.pos.y = dive
         interp_pos = glm.vec3(state.pos.x, state.yspring.update(dive), state.pos.z)
         if rl.is_key_down(rl.KEY_SPACE):
             if state.bullet_cooldown <= 0:
                 state.bullets_pos[state.bullet_i] = glm.vec3(interp_pos)
-                state.bullets_vel[state.bullet_i] = glm.vec3(0, 0, state.vel.z) + glm.vec3(
-                    0, 0, -0.4
-                )
+                state.bullets_vel[state.bullet_i] = glm.vec3(
+                    0, 0, state.vel.z
+                ) + glm.vec3(0, 0, -0.4)
                 state.bullet_i = (state.bullet_i + 1) % len(state.bullets_pos)
                 state.bullet_cooldown = 0.1
                 rl.set_sound_pitch(gun_sound, 1.0 + random.random() * 0.1 - 0.2)
@@ -497,6 +685,8 @@ def update(state):
             state.vel.z += inputv.y / 2
         else:
             state.vel.z *= 0.99
+
+        if inputv.x == 0:
             state.vel.x *= 0.9
 
         # add waterlog factor
@@ -524,7 +714,7 @@ def update(state):
         state.bullet_cooldown -= rl.get_frame_time()
 
         if state.invincible_time < 0:
-            if died_pos := collide_with_obstacle(interp_pos, PLAYER_RADIUS):
+            if died_pos := collide_with_obstacle(state, interp_pos, PLAYER_RADIUS):
                 if state.armor > 1:
                     state.armor -= 1
                     state.invincible_time = 2
@@ -551,9 +741,15 @@ def update(state):
     else:
         assert False
     state.camspring.update(camera_goal_pos)
+    is_under_water_pre = cam.position.y < WATER_LEVEL
     cam.position = state.camspring.y.to_tuple()
     cam.target = (interp_pos + glm.vec3(0, 0, -4)).to_tuple()
     is_under_water = cam.position.y < WATER_LEVEL
+    if not is_under_water_pre and is_under_water:
+        rll.AttachAudioStreamProcessor(bg.stream, lowpass)
+    if is_under_water_pre and not is_under_water:
+        rll.DetachAudioStreamProcessor(bg.stream, lowpass)
+
 
     rl.set_shader_value(
         fog_shader,
@@ -596,11 +792,13 @@ def update(state):
             rl.SHADER_UNIFORM_VEC3,
         )
 
-    if state.pstate == 'alive':
+    if state.pstate == "alive":
         cam.fovy = (
             45
             + (
-                glm.distance(interp_pos, (cam.position.x, cam.position.y, cam.position.z))
+                glm.distance(
+                    interp_pos, (cam.position.x, cam.position.y, cam.position.z)
+                )
                 / 22
             )
             * 20
@@ -611,15 +809,25 @@ def update(state):
     # update enemies
     if state.enemies:
         lanes = [x for x in range(-20, 20, LANE_WIDTH)]
-        for obstacle in z_near(state.spike_obstacles, max(state.enemies, key=lambda e: e.pos.z).pos.z - 10, 20):
+        for obstacle in z_near(
+            state.spike_obstacles,
+            max(state.enemies, key=lambda e: e.pos.z).pos.z - 10,
+            20,
+        ):
             for off in (-2, 0, 2):
                 try:
-                    lanes.remove(math.floor((obstacle.x + off) / LANE_WIDTH) * LANE_WIDTH)
+                    lanes.remove(
+                        math.floor((obstacle.x + off) / LANE_WIDTH) * LANE_WIDTH
+                    )
                 except ValueError:
                     pass
 
         available_lanes = list(lanes)
-        start_i = len(available_lanes) // 2 - (len(state.enemies) // 2) if len(available_lanes) > len(state.enemies) else 0
+        start_i = (
+            len(available_lanes) // 2 - (len(state.enemies) // 2)
+            if len(available_lanes) > len(state.enemies)
+            else 0
+        )
         for i, enemy in enumerate(state.enemies):
             if available_lanes:
                 lane_i = (start_i + enemy.lane_i) % len(available_lanes)
@@ -638,11 +846,26 @@ def update(state):
                     state.explosions.append((enemy.pos, rl.get_time()))
                     del state.enemies[i]
 
+            enemy.state_time -= rl.get_frame_time()
+            if enemy.state == "idle":
+                if enemy.state_time < 0:
+                    enemy.state = "attack"
+                    enemy.state_time = 0.5
+            elif enemy.state == "attack":
+                if enemy.state_time < 0:
+                    for i in range(5):
+                        state.enemy_bullets.append(enemy.pos + glm.vec3(0, 0, 0.5) * i)
+                    enemy.state = "idle"
+                    enemy.state_time = 2 + random.random()
 
     # update bullets
+    for i, pos in enumerate(state.enemy_bullets):
+        pos.z += 0.3
+        if pos.z > cam.position.z:
+            del state.enemy_bullets[0]
     state.bullets_pos += state.bullets_vel
     for i, bullet in enumerate(state.bullets_pos):
-        collide = collide_with_obstacle(bullet, BULLET_RADIUS)
+        collide = collide_with_obstacle(state, bullet, BULLET_RADIUS)
         for i, e in enumerate(state.enemies):
             if glm.distance(bullet, e.pos) < BULLET_RADIUS + ENEMY_RADIUS:
                 state.explosions.append((bullet, rl.get_time()))
@@ -653,7 +876,6 @@ def update(state):
         if collide:
             state.bullets_pos[i] = glm.vec3()
             state.bullets_vel[i] = glm.vec3()
-
 
     # update water particles
     for i, (pos, vel) in enumerate(state.water_particles):
@@ -681,7 +903,7 @@ def update(state):
     rl.clear_background(rl.BLACK)
 
     rl.begin_shader_mode(psx_shader)
-    #rl.set_shader_value_texture(psx_shader, rl.get_shader_location(psx_shader, "texture1"), render_target.depth)
+    # rl.set_shader_value_texture(psx_shader, rl.get_shader_location(psx_shader, "texture1"), render_target.depth)
     rl.draw_texture_pro(
         render_target.texture,
         rl.Rectangle(0, 0, render_target.texture.width, -render_target.texture.height),
@@ -690,6 +912,9 @@ def update(state):
         0,
         rl.SKYBLUE if is_under_water else rl.WHITE,
     )
+    if flash > 0:
+        rl.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.color_alpha(rl.WHITE, flash))
+        flash -= rl.get_frame_time()
     rl.end_shader_mode()
 
     # debug reflect buffer
@@ -725,12 +950,11 @@ def update(state):
             SCREEN_WIDTH // 2 + 40,
             SCREEN_HEIGHT // 2 - 20,
             20,
-            rl.GRAY)
-        rl.draw_text("ARMR",
-                     SCREEN_WIDTH // 2 + 40,
-                     SCREEN_HEIGHT // 2,
-                     5,
-                     rl.DARKGREEN)
+            rl.GRAY,
+        )
+        rl.draw_text(
+            "ARMR", SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2, 5, rl.DARKGREEN
+        )
         for i in range(3):
             if state.armor > i:
                 rl.draw_rectangle(
@@ -738,15 +962,16 @@ def update(state):
                     SCREEN_HEIGHT // 2 + 1,
                     10,
                     7,
-                    rl.DARKGREEN)
+                    rl.DARKGREEN,
+                )
             else:
                 rl.draw_rectangle(
                     SCREEN_WIDTH // 2 + 40 + 31 + i * 15,
                     SCREEN_HEIGHT // 2 + 1,
                     10,
                     7,
-                    rl.color_alpha(rl.DARKGREEN, 0.2))
-
+                    rl.color_alpha(rl.DARKGREEN, 0.2),
+                )
 
     if state.pstate == "dead":
         rl.draw_text(
@@ -756,11 +981,35 @@ def update(state):
     if state.water - 1 > 0.1:
         if (rl.get_time() % 0.4) < 0.2:
             x = SCREEN_WIDTH // 2 + 40
-            rl.draw_text("WARNING: WATERLOGGED", x, SCREEN_HEIGHT // 2 - 120, 30, rl.RED)
+            rl.draw_text(
+                "WARNING: WATERLOGGED", x, SCREEN_HEIGHT // 2 - 120, 30, rl.RED
+            )
             if waterlog_factor < 1:
-                rl.draw_text(f"{int((2-state.water)*100)}% capacity", x, SCREEN_HEIGHT // 2 - 90, 30, rl.RED)
+                rl.draw_text(
+                    f"{int((2-state.water)*100)}% capacity",
+                    x,
+                    SCREEN_HEIGHT // 2 - 90,
+                    30,
+                    rl.RED,
+                )
     elif state.water < 0.05:
-        rl.draw_text("WATER LOW - DIVE TO FILL TANK", SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 120, 20, rl.BLUE)
+        rl.draw_text(
+            "WATER LOW - DIVE TO FILL TANK",
+            SCREEN_WIDTH // 2 + 40,
+            SCREEN_HEIGHT // 2 - 120,
+            20,
+            rl.BLUE,
+        )
+
+    # level management
+    global level_coro
+    if level_coro:
+        try:
+            next(level_coro)
+        except StopIteration:
+            state.level += 1
+            level_coro = levels[state.level](state)
+
 
 if __name__ == "__main__":
     while not rl.window_should_close():
