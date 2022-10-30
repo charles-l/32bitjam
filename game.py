@@ -13,6 +13,7 @@ SCREEN_WIDTH = 320 * 3
 SCREEN_HEIGHT = 240 * 3
 
 pnoise = PerlinNoise()
+hide_hud = False
 
 def draw_text_centered(text, font_size, color, x=None, y=None):
     if x is None:
@@ -184,15 +185,20 @@ class Spring:
         self.y = x0
         self.yd = type(x0)(0)
 
-    def update(self, x, xd=None, k3=None):
-        dt = rl.get_frame_time() or 0.01
+    def update(self, x, xd=None):
+        dt = rl.get_frame_time()
+        if dt == 0:
+            return x
+
         if xd is None:
             xd = (x - self.xp) / dt
             self.xp = x
-        k2_stable = max(self.k2, 1.1 * ((dt**2) / 4 + dt * self.k1 / 2))
+        # This breaks the first frame, so I'm just using k2 and hoping for
+        # stability since I don't have any high frequency stuff 🤞
+        #k2_stable = max(self.k2, 1.1 * ((dt**2) / 4 + dt * self.k1 / 2))
         self.y += dt * self.yd
         self.yd += (
-            dt * (x + (k3 or self.k3) * xd - self.y - self.k1 * self.yd) / k2_stable
+            dt * (x + self.k3 * xd - self.y - self.k1 * self.yd) / self.k2
         )
         return self.y
 
@@ -830,7 +836,7 @@ def render_scene(state, camera, interp_pos, reflected=False):
 flash = 0
 
 def update(state):
-    global flash
+    global flash, hide_hud
 
     state.level_time += rl.get_frame_time()
 
@@ -960,12 +966,11 @@ def update(state):
 
     # cam update
     if state.pstate == "alive":
-        camera_goal_pos = interp_pos + glm.vec3(0, glm.clamp(5 + state.vel.z * 1.5, 3, 10), 8)
+        camera_goal_pos = interp_pos + glm.vec3(0, 5 + state.vel.z * 1.5, 8)
     elif state.pstate == "dead":
         camera_goal_pos = state.pos + glm.vec3(0, -0.3 + state.camspring.y.y, 12)
     else:
         assert False
-    state.camspring.update(camera_goal_pos)
     is_under_water_pre = cam.position.y < WATER_LEVEL
     state.cam_shake_amount = max(state.cam_shake_amount - rl.get_frame_time(), 0)
     cam_shake_vec =  glm.vec3(pnoise(rl.get_time() * 40) * 4,
@@ -1256,81 +1261,92 @@ def update(state):
     #                     0,
     #                     rl.WHITE)
 
-    if state.pstate == "alive":
-        water, waterlogged = min(state.water, 1), max(state.water - 1, 0)
-        rl.draw_ring(
-            (SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 40),
-            10,
-            13,
-            0,
-            360 / (1 / water) if water > 0 else 0,
-            16,
-            rl.BLUE,
-        )
-        rl.draw_ring(
-            (SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 40),
-            10,
-            13,
-            0,
-            360 / (1 / waterlogged) if waterlogged > 0 else 0,
-            16,
-            rl.RED,
-        )
-        rl.draw_text(
-            f"{round(abs(state.vel.z)*10):} m/s",
-            SCREEN_WIDTH // 2 + 40,
-            SCREEN_HEIGHT // 2 - 20,
-            20,
-            rl.GRAY,
-        )
-        rl.draw_text(
-            "ARMR", SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2, 5, rl.DARKGREEN
-        )
-        for i in range(3):
-            if state.armor > i:
-                rl.draw_rectangle(
-                    SCREEN_WIDTH // 2 + 40 + 31 + i * 15,
-                    SCREEN_HEIGHT // 2 + 1,
-                    10,
-                    7,
-                    rl.DARKGREEN,
-                )
-            else:
-                rl.draw_rectangle(
-                    SCREEN_WIDTH // 2 + 40 + 31 + i * 15,
-                    SCREEN_HEIGHT // 2 + 1,
-                    10,
-                    7,
-                    rl.color_alpha(rl.DARKGREEN, 0.2),
-                )
+    if rl.is_key_released(rl.KEY_F8):
+        hide_hud = not hide_hud
 
-    if state.pstate == "dead":
-        rl.draw_text(
-            "Press down arrow to restart", 10, int(SCREEN_HEIGHT / 2), 50, rl.WHITE
-        )
 
-    if state.water - 1 > 0.1:
-        if (rl.get_time() % 0.4) < 0.2:
-            x = SCREEN_WIDTH // 2 + 40
-            rl.draw_text(
-                "WARNING: WATERLOGGED", x, SCREEN_HEIGHT // 2 - 120, 30, rl.RED
+    if not hide_hud:
+        if state.pstate == "alive":
+            water, waterlogged = min(state.water, 1), max(state.water - 1, 0)
+            rl.draw_ring(
+                (SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 40),
+                10,
+                13,
+                0,
+                360 / (1 / water) if water > 0 else 0,
+                16,
+                rl.BLUE,
             )
-            if waterlog_factor < 1:
+            rl.draw_ring(
+                (SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2 - 40),
+                10,
+                13,
+                0,
+                360 / (1 / waterlogged) if waterlogged > 0 else 0,
+                16,
+                rl.RED,
+            )
+            rl.draw_text(
+                f"{round(abs(state.vel.z)*10):} m/s",
+                SCREEN_WIDTH // 2 + 40,
+                SCREEN_HEIGHT // 2 - 20,
+                20,
+                rl.GRAY,
+            )
+            rl.draw_text(
+                "ARMR", SCREEN_WIDTH // 2 + 40, SCREEN_HEIGHT // 2, 5, rl.DARKGREEN
+            )
+            for i in range(3):
+                if state.armor > i:
+                    rl.draw_rectangle(
+                        SCREEN_WIDTH // 2 + 40 + 31 + i * 15,
+                        SCREEN_HEIGHT // 2 + 1,
+                        10,
+                        7,
+                        rl.DARKGREEN,
+                    )
+                else:
+                    rl.draw_rectangle(
+                        SCREEN_WIDTH // 2 + 40 + 31 + i * 15,
+                        SCREEN_HEIGHT // 2 + 1,
+                        10,
+                        7,
+                        rl.color_alpha(rl.DARKGREEN, 0.2),
+                    )
+
+        if state.pstate == "dead":
+            rl.draw_text(
+                "Press down arrow to restart", 10, int(SCREEN_HEIGHT / 2), 50, rl.WHITE
+            )
+
+        if state.water - 1 > 0.1:
+            if (rl.get_time() % 0.4) < 0.2:
+                x = SCREEN_WIDTH // 2 + 40
                 rl.draw_text(
-                    f"{int((2-state.water)*100)}% capacity",
-                    x,
-                    SCREEN_HEIGHT // 2 - 90,
-                    30,
-                    rl.RED,
+                    "WARNING: WATERLOGGED", x, SCREEN_HEIGHT // 2 - 120, 30, rl.RED
                 )
-    elif state.water < 0.05:
-        rl.draw_text(
-            "WATER LOW - DIVE TO FILL TANK",
-            SCREEN_WIDTH // 2 + 40,
-            SCREEN_HEIGHT // 2 - 120,
-            20,
-            rl.BLUE,
-        )
+                if waterlog_factor < 1:
+                    rl.draw_text(
+                        f"{int((2-state.water)*100)}% capacity",
+                        x,
+                        SCREEN_HEIGHT // 2 - 90,
+                        30,
+                        rl.RED,
+                    )
+        elif state.water < 0.05:
+            rl.draw_text(
+                "WATER LOW - DIVE TO FILL TANK",
+                SCREEN_WIDTH // 2 + 40,
+                SCREEN_HEIGHT // 2 - 120,
+                20,
+                rl.BLUE,
+            )
+        rl.draw_fps(10, 10)
+
+    # XXX
+    # if we run this in the middle we get jitter, it has to do with the timing
+    # of rl.get_frame_time() i think...
+    state.camspring.update(camera_goal_pos)
 
     # level management
     global level_coro
@@ -1339,7 +1355,6 @@ def update(state):
     except StopIteration:
         state.level += 1
         reset_level(state)
-    rl.draw_fps(10, 10)
 
 if __name__ == "__main__":
     while not rl.window_should_close():
