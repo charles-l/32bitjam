@@ -861,10 +861,10 @@ def update(state):
             state.water -= 0.2 * rl.get_frame_time()
             dive = 3
             state.water_particles.append(
-                (state.pos + glm.vec3(-0.3, -1, -0.1), state.vel + glm.vec3(0, -1, 0))
+                (state.pos + glm.vec3(-0.3, -0.5, -0.1), state.vel + glm.vec3(0, -1, 0))
             )
             state.water_particles.append(
-                (state.pos + glm.vec3(0.3, -1, -0.1), state.vel + glm.vec3(0, -1, 0))
+                (state.pos + glm.vec3(0.3, -0.5, -0.1), state.vel + glm.vec3(0, -1, 0))
             )
             if not rl.is_music_stream_playing(engine):
                 rl.play_music_stream(engine)
@@ -897,7 +897,7 @@ def update(state):
 
         if inputv.y < 0 and state.water > 0:
             state.water_particles.append(
-                (interp_pos + glm.vec3(0, -0.1, -0.1), state.vel + glm.vec3(0, 0, 1))
+                (interp_pos + glm.vec3(0, -0.5, -0.5), state.vel + glm.vec3(0, 0, 1))
             )
             state.water -= 0.1 * rl.get_frame_time()
             state.vel.z += inputv.y * (1 if glm.length(state.vel.z) < 2 else 0.03)
@@ -926,7 +926,7 @@ def update(state):
         if glm.length(state.vel) > 3:
             state.vel = glm.normalize(state.vel) * 3
 
-        state.pos += state.vel
+        state.pos += state.vel * rl.get_frame_time() * 50
 
         if glm.abs(state.pos.x) > 20:
             state.pos.x = glm.sign(state.pos.x) * 20
@@ -960,7 +960,7 @@ def update(state):
 
     # cam update
     if state.pstate == "alive":
-        camera_goal_pos = interp_pos + glm.vec3(0, 5 + state.vel.z * 1.5, 8)
+        camera_goal_pos = interp_pos + glm.vec3(0, glm.clamp(5 + state.vel.z * 1.5, 4, 10), 8)
     elif state.pstate == "dead":
         camera_goal_pos = state.pos + glm.vec3(0, -0.3 + state.camspring.y.y, 12)
     else:
