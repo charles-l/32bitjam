@@ -8,6 +8,7 @@ in vec3 fragPosition;
 // Input uniform values
 uniform vec4 colDiffuse;
 uniform int isReflection;
+uniform sampler2D texture0;
 
 // Output fragment color
 out vec4 finalColor;
@@ -20,5 +21,6 @@ void main()
 
     if (isReflection == 1 && fragPosition.y < waterlevel) discard;
 
-    finalColor = colDiffuse;
+    vec4 texelColor = texture(texture0, fragTexCoord);
+    finalColor = texelColor * colDiffuse;
 }

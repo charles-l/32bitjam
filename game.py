@@ -4,6 +4,7 @@ import bisect
 import functools
 from dataclasses import dataclass, field
 from argparse import Namespace
+from perlin_noise import PerlinNoise
 import math
 import random
 import glm
@@ -11,6 +12,7 @@ import glm
 SCREEN_WIDTH = 320 * 3
 SCREEN_HEIGHT = 240 * 3
 
+pnoise = PerlinNoise()
 
 def draw_text_centered(text, font_size, color, x=None, y=None):
     if x is None:
@@ -99,6 +101,15 @@ ssr_shader.locs[rl.SHADER_LOC_MATRIX_VIEW] = rl.get_shader_location(
 
 skydome = rl.load_model("sky.glb")
 checkpoint_model = rl.load_model("checkpoint.glb")
+shark = rl.load_model("shark.glb")
+jaw = shark.meshes[0]
+eyes = shark.meshes[1]
+body = shark.meshes[2]
+SHARK_WEAK_POINTS = [
+    (glm.vec3(-6, 3, 2), 1, None),
+    (glm.vec3(+6, 3, 2), 1, None),
+    (glm.vec3(0, 0, 2), 2, lambda state: state.shark.jawspring.y > 0),
+    ]
 
 water_plane = rl.load_model_from_mesh(
     rl.gen_mesh_plane(
@@ -120,6 +131,7 @@ water_time_loc = rl.get_shader_location(water_plane.materials[0].shader, "time")
 
 skydome.materials[0].shader = rl.load_shader("skybox.vert", "skybox.frag")
 skydome.materials[0].maps[0].texture = rl.load_texture("sky.png")
+invert_sky_loc = rl.get_shader_location(skydome.materials[0].shader, "flipColor")
 
 tex = rl.load_texture("texture_06.png")
 explosion_sheet = rl.load_texture("explosion_sheet.png")
@@ -145,10 +157,16 @@ ocean_container = rl.load_model("oceancontainer.glb")
 ocean_container.materials[0] = redmat
 
 gun_sound = rl.load_sound("gun.wav")
+explosion_sound = rl.load_sound("explosion.wav")
+rl.set_sound_volume(explosion_sound, 0.3)
 click_sound = rl.load_sound("click.wav")
+fanfare_sound = rl.load_sound("fanfare.ogg")
 impact = rl.load_sound("impact.wav")
+enemy_shot = rl.load_sound("enemyshot.wav")
 rl.set_sound_volume(gun_sound, 0.3)
-bg = rl.load_music_stream("32bitjam.mp3")
+bg = rl.load_music_stream("32bitjam.ogg")
+engine = rl.load_music_stream("engine.wav")
+rl.set_music_volume(engine, 1.3)
 
 rl.play_music_stream(bg)
 
@@ -191,6 +209,7 @@ class Enemy:
 
 
 state = Namespace(
+    cam_shake_amount=0,
     level=0,
     armor=1,
     invincible_time=0,
@@ -215,7 +234,8 @@ state = Namespace(
     checkpoint_dist=100,
     checkpoint_time=0,
     total_time=0,
-    level_time=0,
+    level_time=45,
+    shark=None,
 )
 
 
@@ -233,8 +253,7 @@ def level_1(state):
         [glm.vec3(0, -1, -500), glm.vec3(0, -1, -2500), glm.vec3(0, 1, -3400)],
         key=lambda v: v.z,
     )
-    # state.checkpoint_dist = 10000
-    state.checkpoint_dist = 100
+    state.checkpoint_dist = 10000
 
     while state.pos.z > -state.checkpoint_dist:
         yield
@@ -314,6 +333,23 @@ def level_2(state):
     while state.pos.z > -state.checkpoint_dist:
         yield
 
+    global flash
+    flash = 1
+
+def display_runup(label, value):
+    display = 0.0
+    while display < value:
+        rl.draw_rectangle(
+            0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.color_alpha(rl.BLACK, 0.5)
+        )
+        display = min(display + 1, value)
+        text = f"{label}: {display:.2f}s"
+        draw_text_centered(text, 30, rl.WHITE)
+        rl.play_sound(click_sound)
+        if display == value:
+            rl.play_sound(impact)
+        yield
+    rl.play_sound(impact)
 
 def intermission(state):
     level_time_seconds = state.level_time
@@ -323,26 +359,18 @@ def intermission(state):
     state.total_time += level_time_seconds
     state.checkpoint_dist = float("inf")
     state.armor += 1
-    display = 0.0
+    yield from display_runup('LEVEL TIME', level_time_seconds)
     while True:
         state.water = 1
         rl.draw_rectangle(
             0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.color_alpha(rl.BLACK, 0.5)
         )
-        if display < level_time_seconds:
-            display = min(display + 1, level_time_seconds)
-            text = f"LEVEL TIME: {display:.2f}s"
-            draw_text_centered(text, 30, rl.WHITE)
-            rl.play_sound(click_sound)
-            if display == level_time_seconds:
-                rl.play_sound(impact)
-        else:
-            draw_text_centered(f"LEVEL TIME: {display:.2f}s", 40, rl.WHITE)
-            if rl.get_time() % 0.8 < 0.6:
-                draw_text_centered(f"REWARD: +1 ARMR", 40, rl.GREEN, y=SCREEN_HEIGHT//2 + 40)
-            draw_text_centered(
-                f"Hit down arrow to continue", 20, rl.WHITE, y=SCREEN_HEIGHT // 2 + 20
-            )
+        draw_text_centered(f"LEVEL TIME: {level_time_seconds:.2f}s", 40, rl.WHITE)
+        if rl.get_time() % 0.8 < 0.6:
+            draw_text_centered(f"REWARD: +1 ARMR", 40, rl.GREEN, y=SCREEN_HEIGHT//2 + 40)
+        draw_text_centered(
+            f"Hit down arrow to continue", 20, rl.WHITE, y=SCREEN_HEIGHT // 2 + 20
+        )
         if rl.is_key_pressed(rl.KEY_DOWN):
             return
         yield
@@ -366,21 +394,105 @@ def lowpass(buffer, frames: int):
         buffer[i] = low[0]
         buffer[i + 1] = low[1]
 
+def level_3(state):
+    rl.set_shader_value(
+        skydome.materials[0].shader,
+        invert_sky_loc,
+        rl.ffi.new("int *", 1),
+        rl.SHADER_UNIFORM_INT,
+    )
+    state.checkpoint_dist = float('infinity')
+    t = rl.get_time()
+    while rl.get_time() - t < 4:
+        yield
+
+    state.shark=Namespace(
+        loop_timer=0,
+        jawspring=Spring(1, 0.5, 2, 0),
+        posspring=Spring(1, 1, -0.01, state.pos + glm.vec3(0, 0, -500)),
+        pos=state.pos + glm.vec3(0, 0, -500),
+        fired=False,
+        step=0,
+        phase=0,
+        shake_amount=0,
+        hitpoints=70,
+        )
+
+    while state.shark.hitpoints > 0:
+        yield
+
+    global flash
+    flash = 1
+
+    rl.set_shader_value(
+        skydome.materials[0].shader,
+        invert_sky_loc,
+        rl.ffi.new("int *", 0),
+        rl.SHADER_UNIFORM_INT,
+    )
+
+    while state.shark.pos.y > -10:
+        yield
+
+    rl.pause_music_stream(bg)
+    rl.play_sound(fanfare_sound)
+    level_time_seconds = state.level_time
+    state.total_time += level_time_seconds
+    yield from display_runup('LEVEL TIME', level_time_seconds)
+    t = rl.get_time()
+    while rl.get_time() - t < 4:
+        rl.draw_rectangle(
+            0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.color_alpha(rl.BLACK, 0.5)
+        )
+        text = f"LEVEL TIME: {level_time_seconds:.2f}s"
+        draw_text_centered(text, 40, rl.WHITE)
+        yield
+
+    yield from display_runup('TOTAL TIME', state.total_time)
+    t = rl.get_time()
+    while True:
+        rl.draw_rectangle(
+            0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.color_alpha(rl.BLACK, 0.5)
+        )
+        text = f"TOTAL TIME: {state.total_time:.2f}s"
+        draw_text_centered(text, 40, rl.WHITE)
+        draw_text_centered(f'ARMOR: {state.armor}', 40, rl.GREEN, y=SCREEN_HEIGHT // 2 + 50)
+        score = max(0, 500 - state.total_time) * state.armor
+        if score > 300:
+            rank = 'S'
+        elif score > 60:
+            rank = 'A'
+        else:
+            rank = 'B'
+        draw_text_centered(f'SCORE: {int(score)}', 40, rl.WHITE, y=SCREEN_HEIGHT // 2 + 100)
+        if rl.get_time() % 0.4 < 0.2:
+            draw_text_centered(f'RANK: {rank}', 40, rl.WHITE, y=SCREEN_HEIGHT // 2 + 150)
+        yield
+
 
 levels = [
     level_1,
     intermission,
     level_2,
     intermission,
-    # level_3,
+    level_3,
 ]
 
-level_coro = levels[0](state)
+
+level_coro = levels[state.level](state)
 
 
 def reset_level(state):
     global cam, level_coro
+    rl.set_shader_value(
+        skydome.materials[0].shader,
+        invert_sky_loc,
+        rl.ffi.new("int *", 0),
+        rl.SHADER_UNIFORM_INT,
+    )
     cam.position = (0, 0, 0)
+    state.died_pos = glm.vec3(0)
+    state.shark = None
     state.camspring.x = glm.vec3(0)
     state.enemies = []
     state.camspring.xp = glm.vec3(0)
@@ -450,6 +562,8 @@ for obstacle_model in obstacle_models.values():
 obstacle_models[-1.0].materials[0].maps[0].color = rl.DARKGRAY
 obstacle_models[0.0].materials[0].maps[0].color = rl.GRAY
 obstacle_models[1.0].materials[0].maps[0].color = rl.WHITE
+shark.materials[1].shader = obstacle_shader
+shark.materials[2].shader = obstacle_shader
 is_reflection_loc = rl.get_shader_location(obstacle_shader, "isReflection")
 
 
@@ -510,11 +624,11 @@ def z_near(arr, z, depth, key=lambda v: v.z):
 def collide_with_obstacle(state, pos, radius):
     for e in z_near(state.spike_obstacles, pos.z, radius + 2):
         if glm.distance(e, pos) < 2 + radius:
-            return pos
+            return pos, 'spike'
 
     for p in state.enemy_bullets:
         if glm.distance(p, pos) < BULLET_RADIUS + radius:
-            return pos
+            return pos, 'enemy_bullet'
 
     for p in z_near(state.obstacles, pos.z, radius + 4):
         if rl.check_collision_box_sphere(
@@ -522,9 +636,16 @@ def collide_with_obstacle(state, pos, radius):
             pos.to_tuple(),
             radius,
         ):
-            return glm.vec3(pos.xy, obstacle_bounding_box(p.y, p.z).max.z + 0.1)
+            return glm.vec3(pos.xy, obstacle_bounding_box(p.y, p.z).max.z + 0.1), 'obstacle'
 
-    return None
+    if state.shark:
+        for o, rad, cond in SHARK_WEAK_POINTS:
+            if (cond is None or cond(state)) and glm.distance(state.shark.pos + o, pos) < rad + radius:
+                return pos, 'shark'
+        if glm.distance(state.shark.pos + glm.vec3(0, 0, -8), pos) < rad + 5:
+            return pos, 'obstacle'
+
+    return None, None
 
 
 def render_scene(state, camera, interp_pos, reflected=False):
@@ -621,6 +742,16 @@ def render_scene(state, camera, interp_pos, reflected=False):
     if state.died_pos != glm.vec3(0):
         rl.draw_sphere_wires(state.died_pos.to_tuple(), PLAYER_RADIUS, 4, 4, rl.BLACK)
 
+    # SHARK
+
+    if state.shark:
+        rl.draw_mesh(jaw, shark.materials[1], sum(glm.transpose(glm.translate(state.shark.pos + glm.vec3(0, 0.5, 0)) @ glm.rotate(state.shark.jawspring.y, glm.vec3(1, 0, 0))).to_tuple(), ()))
+        rl.draw_mesh(eyes, shark.materials[2], sum(glm.transpose(glm.translate(state.shark.pos + glm.vec3(0, 2, 0))).to_tuple(), ()))
+        rl.draw_mesh(body, shark.materials[1], sum(glm.transpose(glm.translate(state.shark.pos + glm.vec3(0, 2, 0))).to_tuple(), ()))
+
+    #for p, rad, _ in SHARK_WEAK_POINTS:
+    #    rl.draw_sphere_wires((state.shark.pos + p).to_tuple(), rad, 8, 4, rl.PINK)
+
     # rl.draw_grid(50, 2)
 
     for p in state.bullets_pos:
@@ -628,7 +759,8 @@ def render_scene(state, camera, interp_pos, reflected=False):
             rl.draw_sphere(p.to_tuple(), BULLET_RADIUS, rl.GREEN)
 
     for p in state.enemy_bullets:
-        rl.draw_sphere(p.to_tuple(), BULLET_RADIUS * 3, rl.RED)
+        if not reflected or p.y > WATER_LEVEL:
+            rl.draw_sphere(p.to_tuple(), BULLET_RADIUS * 3, rl.RED)
 
     for o in state.obstacles:
         rl.draw_model(
@@ -697,18 +829,20 @@ def render_scene(state, camera, interp_pos, reflected=False):
 
 flash = 0
 
-
 def update(state):
     global flash
 
     state.level_time += rl.get_frame_time()
 
     rl.update_music_stream(bg)
+    rl.update_music_stream(engine)
 
     # input
     inputv = glm.vec2()
     dive = 0
     rotation = 0
+
+    rl.pause_music_stream(engine)
 
     if rl.is_key_down(rl.KEY_RIGHT):
         inputv.x += 1
@@ -727,13 +861,16 @@ def update(state):
             state.water -= 0.2 * rl.get_frame_time()
             dive = 3
             state.water_particles.append(
-                (state.pos + glm.vec3(-0.3, -0.1, -0.1), state.vel + glm.vec3(0, -1, 0))
+                (state.pos + glm.vec3(-0.3, -1, -0.1), state.vel + glm.vec3(0, -1, 0))
             )
             state.water_particles.append(
-                (state.pos + glm.vec3(0.3, -0.1, -0.1), state.vel + glm.vec3(0, -1, 0))
+                (state.pos + glm.vec3(0.3, -1, -0.1), state.vel + glm.vec3(0, -1, 0))
             )
+            if not rl.is_music_stream_playing(engine):
+                rl.play_music_stream(engine)
     else:
         dive = 0
+
 
     interp_pos = state.pos
 
@@ -764,6 +901,8 @@ def update(state):
             )
             state.water -= 0.1 * rl.get_frame_time()
             state.vel.z += inputv.y * (1 if glm.length(state.vel.z) < 2 else 0.03)
+            if not rl.is_music_stream_playing(engine):
+                rl.play_music_stream(engine)
         elif inputv.y > 0:
             state.vel.z += inputv.y / 2
         else:
@@ -797,7 +936,8 @@ def update(state):
         state.bullet_cooldown -= rl.get_frame_time()
 
         if state.invincible_time < 0:
-            if died_pos := collide_with_obstacle(state, interp_pos, PLAYER_RADIUS):
+            died_pos, other = collide_with_obstacle(state, interp_pos, PLAYER_RADIUS)
+            if died_pos:
                 if state.armor > 1:
                     state.armor -= 1
                     state.invincible_time = 2
@@ -805,6 +945,8 @@ def update(state):
                     state.pstate = "dead"
                     state.died_pos = died_pos
                 state.explosions.append((died_pos, rl.get_time()))
+                rl.play_sound(explosion_sound)
+                state.cam_shake_amount = 0.3
 
         if state.water > 2:
             state.pstate = "dead"
@@ -825,8 +967,13 @@ def update(state):
         assert False
     state.camspring.update(camera_goal_pos)
     is_under_water_pre = cam.position.y < WATER_LEVEL
-    cam.position = state.camspring.y.to_tuple()
-    cam.target = (interp_pos + glm.vec3(0, 0, -4)).to_tuple()
+    state.cam_shake_amount = max(state.cam_shake_amount - rl.get_frame_time(), 0)
+    cam_shake_vec =  glm.vec3(pnoise(rl.get_time() * 40) * 4,
+                                                 pnoise(rl.get_time() * 40 + 2) * 4,
+                                                 0) * state.cam_shake_amount
+    cam.position = (state.camspring.y + cam_shake_vec
+                    ).to_tuple()
+    cam.target = (interp_pos + glm.vec3(0, 0, -4) + cam_shake_vec * 10).to_tuple()
     is_under_water = cam.position.y < WATER_LEVEL
     if not is_under_water_pre and is_under_water:
         rll.AttachAudioStreamProcessor(bg.stream, lowpass)
@@ -878,9 +1025,9 @@ def update(state):
         cam.fovy = (
             45
             + (
-                glm.distance(
+                glm.clamp(glm.distance(
                     interp_pos, (cam.position.x, cam.position.y, cam.position.z)
-                )
+                ), 4, 22)
                 / 22
             )
             * 20
@@ -926,6 +1073,7 @@ def update(state):
             for collider in z_near(state.spike_obstacles, enemy.pos.z, 4):
                 if glm.distance(collider, enemy.pos) < 3:
                     state.explosions.append((enemy.pos, rl.get_time()))
+                    rl.play_sound(explosion_sound)
                     del state.enemies[i]
 
             enemy.state_time -= rl.get_frame_time()
@@ -937,8 +1085,101 @@ def update(state):
                 if enemy.state_time < 0:
                     for i in range(5):
                         state.enemy_bullets.append(enemy.pos + glm.vec3(0, 0, 0.5) * i)
+                    rl.play_sound(enemy_shot)
                     enemy.state = "idle"
                     enemy.state_time = 2 + random.random()
+
+    # update shark
+    if state.shark:
+        state.shark.loop_timer += rl.get_frame_time()
+        if state.shark.hitpoints > 50:
+            state.shark.phase = 0
+        elif state.shark.hitpoints > 20:
+            state.shark.phase = 1
+        elif state.shark.hitpoints > 0:
+            state.shark.phase = 2
+        else:
+            if state.shark.phase != 3:
+                for i in range(30):
+                    state.explosions.append(
+                        (state.shark.pos + glm.vec3(random.random() * 5,
+                                                    random.random() * 5,
+                                                    4 + random.random() * 5,
+                                                    ),
+                         rl.get_time()))
+                    rl.play_sound(explosion_sound)
+
+            state.shark.phase = 3
+
+        if state.shark.phase == 0:
+            goal_pos = glm.vec3(state.shark.pos.x, 0, state.pos.z) + glm.vec3(0, 0, -40)
+            if state.shark.loop_timer % 10 < 4:
+                goal_pos.y = -8
+            else:
+                if state.shark.pos.y > WATER_LEVEL:
+                    goal_pos.x = state.pos.x
+                goal_pos.y = 0
+
+            if 7 < state.shark.loop_timer % 10 < 9:
+                state.shark.jawspring.update(0.5)
+                shark.materials[2].maps[0].color = (255, 0, 0)
+                if not state.shark.fired:
+                    state.shark.fired = True
+                    rl.play_sound(enemy_shot)
+                    for i in range(5):
+                        state.enemy_bullets.append(state.shark.pos + glm.vec3(0, 0, 0.5) * i)
+            else:
+                state.shark.fired = False
+                state.shark.jawspring.update(0)
+                shark.materials[2].maps[0].color = (100, 0, 0)
+        elif state.shark.phase == 1:
+            goal_pos = glm.vec3(state.shark.pos.x, 0, state.pos.z) + glm.vec3(0, 0, -40)
+            if state.shark.loop_timer % 5 < 2:
+                goal_pos.y = -8
+            else:
+                if state.shark.pos.y > WATER_LEVEL:
+                    goal_pos.x = state.pos.x
+                goal_pos.y = 0
+
+            if 3 < state.shark.loop_timer % 5 < 4:
+                state.shark.jawspring.update(0.5)
+                shark.materials[2].maps[0].color = (255, 0, 0)
+                if not state.shark.fired:
+                    rl.play_sound(enemy_shot)
+                    state.shark.fired = True
+                    for i in range(5):
+                        state.enemy_bullets.append(state.shark.pos + glm.vec3(0, 0, 0.5) * i)
+            else:
+                state.shark.fired = False
+                state.shark.jawspring.update(0)
+                shark.materials[2].maps[0].color = (100, 0, 0)
+        elif state.shark.phase == 2:
+            goal_pos = glm.vec3(state.shark.pos.x, 0, state.pos.z) + glm.vec3(0, 0, -40)
+            tstep = int(state.shark.loop_timer % 20)
+            state.shark.jawspring.update(0.7)
+            if tstep < 10:
+                i = tstep
+                goal_pos.y =  0
+            else:
+                i = 20 - tstep
+                goal_pos.y = -6
+            if tstep != state.shark.step:
+                state.shark.step = tstep
+                rl.play_sound(enemy_shot)
+                for i in range(5):
+                    state.enemy_bullets.append(state.shark.pos + glm.vec3(0, 0, 0.5) * i)
+                    state.shark.fired = True
+            goal_pos.x = (40 / 10) * i - 20
+        elif state.shark.phase == 3:
+            goal_pos = state.shark.pos + glm.vec3(0, -1, 0)
+
+
+        state.shark.shake_amount = max(0, state.shark.shake_amount - rl.get_frame_time())
+        state.shark.pos = state.shark.posspring.update(goal_pos) + glm.vec3(
+            pnoise(rl.get_time() * 20),
+            pnoise(rl.get_time() * 20),
+            pnoise(rl.get_time() * 20)) * state.shark.shake_amount
+
 
     # update bullets
     for i, pos in enumerate(state.enemy_bullets):
@@ -947,10 +1188,16 @@ def update(state):
             del state.enemy_bullets[0]
     state.bullets_pos += state.bullets_vel
     for i, bullet in enumerate(state.bullets_pos):
-        collide = collide_with_obstacle(state, bullet, BULLET_RADIUS)
+        collide, other = collide_with_obstacle(state, bullet, BULLET_RADIUS)
+        if other == 'shark':
+            state.explosions.append((bullet, rl.get_time()))
+            state.shark.shake_amount = 1
+            state.shark.hitpoints -= 1
+
         for i, e in enumerate(state.enemies):
             if glm.distance(bullet, e.pos) < BULLET_RADIUS + ENEMY_RADIUS:
                 state.explosions.append((bullet, rl.get_time()))
+                rl.play_sound(explosion_sound)
                 del state.enemies[i]
                 collide = True
                 break
@@ -1093,10 +1340,6 @@ def update(state):
         state.level += 1
         reset_level(state)
     rl.draw_fps(10, 10)
-
-    if rl.is_key_pressed(rl.KEY_D):
-        breakpoint()
-
 
 if __name__ == "__main__":
     while not rl.window_should_close():

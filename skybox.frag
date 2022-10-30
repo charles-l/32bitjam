@@ -12,6 +12,7 @@ uniform vec4 colDiffuse;
 out vec4 finalColor;
 
 // NOTE: Add here your custom variables
+uniform int flipColor;
 
 void main()
 {
@@ -20,5 +21,9 @@ void main()
 
     // NOTE: Implement here your fragment shader code
 
-    finalColor = texelColor*colDiffuse;
+    if(flipColor == 0) {
+        finalColor = texelColor*colDiffuse;
+    } else {
+        finalColor = vec4(1-(texelColor*colDiffuse).rgb, 1);
+    }
 }
