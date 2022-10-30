@@ -72,7 +72,7 @@ if __name__ == "__main__":
     rl.init_audio_device()
 
 cam = rl.Camera3D(
-    rl.Vector3(-10, 15, -10),
+    rl.Vector3(0, 0, 0),
     rl.Vector3(0, 0, 0),
     rl.Vector3(0, 1, 0),
     45,
@@ -221,7 +221,7 @@ state = Namespace(
     bullet_cooldown=0,
     yspring=Spring(2, 0.5, 0, 0),
     rotspring=Spring(1, 0.5, 2, 0),
-    camspring=Spring(0.1, 10, 2, glm.vec3(0, 8, 4)),
+    camspring=Spring(0.1, 10, 2, glm.vec3(0, 0, 0)),
     bullets_pos=glm.array.zeros(100, glm.vec3),
     bullets_vel=glm.array.zeros(100, glm.vec3),
     enemy_bullets=[],
@@ -960,7 +960,7 @@ def update(state):
 
     # cam update
     if state.pstate == "alive":
-        camera_goal_pos = interp_pos + glm.vec3(0, glm.clamp(5 + state.vel.z * 1.5, 4, 10), 8)
+        camera_goal_pos = interp_pos + glm.vec3(0, glm.clamp(5 + state.vel.z * 1.5, 3, 10), 8)
     elif state.pstate == "dead":
         camera_goal_pos = state.pos + glm.vec3(0, -0.3 + state.camspring.y.y, 12)
     else:
