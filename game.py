@@ -142,6 +142,7 @@ skydome.materials[0].maps[0].texture = rl.load_texture("sky.png")
 invert_sky_loc = rl.get_shader_location(skydome.materials[0].shader, "flipColor")
 
 tex = rl.load_texture("texture_06.png")
+bubble = rl.load_texture("bubble.png")
 explosion_sheet = rl.load_texture("explosion_sheet.png")
 water_spray = rl.load_texture("spray.png")
 mat = rl.load_material_default()
@@ -225,7 +226,8 @@ class Enemy:
 
 state = Namespace(
     cam_shake_amount=0,
-    level=3,
+    bubble_time=0,
+    level=0,
     armor=1,
     invincible_time=0,
     vel=glm.vec3(0),
@@ -243,6 +245,7 @@ state = Namespace(
     bullet_i=0,
     spike_obstacles=glm.array.zeros(0, glm.vec3),
     enemies=[],
+    bubbles=[],
     explosions=[],
     water_particles=[],
     obstacles=[],
@@ -840,6 +843,28 @@ def render_scene(state, camera, interp_pos, reflected=False):
                 (4, 4),
                 rl.WHITE,
             )
+
+    if rl.is_key_pressed(rl.KEY_S):
+        state.bubbles.append(glm.vec3(0, -4, 0))
+
+    state.bubble_time += rl.get_frame_time() + random.random() * 0.01
+    if state.bubble_time > 3 and interp_pos.y < WATER_LEVEL:
+        state.bubbles.append(interp_pos)
+        state.bubble_time = 0
+
+    if not reflected:
+        for i, pos in enumerate(state.bubbles):
+            rl.draw_billboard_rec(
+                camera,
+                bubble,
+                rl.Rectangle(0, 0, 16, 16),
+                (glm.vec3(interp_pos.x+0.3 + glm.sin(pos.y*2)*0.3, pos.y, interp_pos.z)).to_tuple(),
+                (0.5, 0.5),
+                rl.WHITE,
+            )
+            pos.y += 0.04
+            if pos.y > WATER_LEVEL-0.05:
+                del state.bubbles[i]
 
     if abs(interp_pos.y - WATER_LEVEL) < 0.5:
         add_splash(state, state.pos)
