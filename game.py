@@ -1199,7 +1199,7 @@ def update(state):
         pos.z += 0.3
         if pos.z > cam.position.z:
             del state.enemy_bullets[0]
-    state.bullets_pos += state.bullets_vel
+    state.bullets_pos += state.bullets_vel * rl.get_frame_time() * 50
     for i, bullet in enumerate(state.bullets_pos):
         collide, other = collide_with_obstacle(state, bullet, BULLET_RADIUS)
         if other == 'shark':
@@ -1355,6 +1355,10 @@ def update(state):
     # if we run this in the middle we get jitter, it has to do with the timing
     # of rl.get_frame_time() i think...
     state.camspring.update(camera_goal_pos)
+
+    if rl.is_key_released(rl.KEY_F11):
+        # cheat mode
+        breakpoint()
 
     # level management
     global level_coro
