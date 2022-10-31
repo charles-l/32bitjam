@@ -23,6 +23,13 @@ def draw_text_centered(text, font_size, color, x=None, y=None):
     rl.draw_text(text, x, y, font_size, color)
 
 
+def add_splash(state, pos, scale=1, toffset=0):
+    # rate limit
+    if not state.splashes or rl.get_time() - state.splashes[-1][1] > 0.01:
+        state.splashes.append(((pos.x, pos.z), scale, rl.get_time() + toffset))
+
+
+
 def load_render_texture_with_depth(width, height):
     target = rl.RenderTexture()
     target.id = rll.rlLoadFramebuffer(width, height)
@@ -136,6 +143,7 @@ invert_sky_loc = rl.get_shader_location(skydome.materials[0].shader, "flipColor"
 
 tex = rl.load_texture("texture_06.png")
 explosion_sheet = rl.load_texture("explosion_sheet.png")
+water_spray = rl.load_texture("spray.png")
 mat = rl.load_material_default()
 rl.set_material_texture(mat, rll.MATERIAL_MAP_ALBEDO, tex)
 mat.shader = fog_shader
@@ -217,7 +225,7 @@ class Enemy:
 
 state = Namespace(
     cam_shake_amount=0,
-    level=0,
+    level=3,
     armor=1,
     invincible_time=0,
     vel=glm.vec3(0),
@@ -238,6 +246,7 @@ state = Namespace(
     explosions=[],
     water_particles=[],
     obstacles=[],
+    splashes=[],
     checkpoint_dist=100,
     checkpoint_time=0,
     total_time=0,
@@ -420,8 +429,8 @@ def level_3(state):
     state.shark=Namespace(
         loop_timer=0,
         jawspring=Spring(1, 0.5, 2, 0),
-        posspring=Spring(1, 1, -0.01, state.pos + glm.vec3(0, 0, -500)),
-        pos=state.pos + glm.vec3(0, 0, -500),
+        posspring=Spring(1, 1, -0.01, state.pos + glm.vec3(0, -500, -500)),
+        pos=state.pos + glm.vec3(0, -500, -500),
         fired=False,
         step=0,
         phase=0,
@@ -832,6 +841,24 @@ def render_scene(state, camera, interp_pos, reflected=False):
                 rl.WHITE,
             )
 
+    if abs(interp_pos.y - WATER_LEVEL) < 0.5:
+        add_splash(state, state.pos)
+
+    for i, (splash_pos, splash_scale, splash_init_time) in enumerate(state.splashes):
+        t = (rl.get_time() - splash_init_time) * 6 / (splash_scale / 2)
+        h = 1-abs(t*2-1)
+        rl.draw_billboard_rec(
+            camera,
+            water_spray,
+            rl.Rectangle(0, 0, 256, 256),
+            (splash_pos[0], WATER_LEVEL + h/2, splash_pos[1]),
+            (2*splash_scale, h*splash_scale),
+            rl.WHITE,
+        )
+        if t >= 1:
+            del state.splashes[i]
+
+
     for pos, _ in state.water_particles:
         if not reflected or pos.y > WATER_LEVEL:
             rl.draw_sphere(pos.to_tuple(), 0.3, rl.BLUE)
@@ -1186,6 +1213,12 @@ def update(state):
         elif state.shark.phase == 3:
             goal_pos = state.shark.pos + glm.vec3(0, -1, 0)
 
+        if abs(state.shark.pos.y - WATER_LEVEL) < 0.2:
+            print('sharksplash')
+            add_splash(state, state.shark.pos + glm.vec3(5, 0, 6), scale=5+2*random.random(), toffset=random.random()*0.5)
+            add_splash(state, state.shark.pos + glm.vec3(-5, 0, 6), scale=5+2*random.random(), toffset=random.random()*0.5)
+            add_splash(state, state.shark.pos + glm.vec3(0, 0, 8), scale=3+random.random(), toffset=random.random()*0.5)
+
 
         state.shark.shake_amount = max(0, state.shark.shake_amount - rl.get_frame_time())
         state.shark.pos = state.shark.posspring.update(goal_pos) + glm.vec3(
@@ -1223,6 +1256,9 @@ def update(state):
     for i, (pos, vel) in enumerate(state.water_particles):
         pos += vel
         pos.y -= 0.098
+        if abs(pos.y - WATER_LEVEL) < 0.3:
+            add_splash(state, pos)
+
         if pos.y < WATER_LEVEL - 8:
             del state.water_particles[i]
 
