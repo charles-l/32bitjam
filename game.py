@@ -166,6 +166,7 @@ impact = rl.load_sound("impact.wav")
 enemy_shot = rl.load_sound("enemyshot.wav")
 rl.set_sound_volume(gun_sound, 0.3)
 bg = rl.load_music_stream("32bitjam.ogg")
+bossbg = rl.load_music_stream("boss.ogg")
 engine = rl.load_music_stream("engine.wav")
 rl.set_music_volume(engine, 1.3)
 
@@ -401,6 +402,10 @@ def lowpass(buffer, frames: int):
         buffer[i + 1] = low[1]
 
 def level_3(state):
+    global bg
+    rl.pause_music_stream(bg)
+    bg = bossbg
+    rl.play_music_stream(bossbg)
     rl.set_shader_value(
         skydome.materials[0].shader,
         invert_sky_loc,
@@ -438,6 +443,8 @@ def level_3(state):
     )
 
     while state.shark.pos.y > -10:
+        vol = glm.clamp((state.shark.pos.y + 10)/10, 0, 1)
+        rl.set_music_volume(bg, vol)
         yield
 
     rl.pause_music_stream(bg)
@@ -490,6 +497,7 @@ level_coro = levels[state.level](state)
 
 def reset_level(state):
     global cam, level_coro
+    rl.set_music_volume(bg, 1)
     rl.set_shader_value(
         skydome.materials[0].shader,
         invert_sky_loc,
@@ -890,8 +898,8 @@ def update(state):
             if state.bullet_cooldown <= 0:
                 state.bullets_pos[state.bullet_i] = glm.vec3(interp_pos)
                 state.bullets_vel[state.bullet_i] = glm.vec3(
-                    0, 0, state.vel.z
-                ) + glm.vec3(0, 0, -0.4)
+                    0, 0, -4
+                )
                 state.bullet_i = (state.bullet_i + 1) % len(state.bullets_pos)
                 state.bullet_cooldown = 0.1
                 rl.set_sound_pitch(gun_sound, 1.0 + random.random() * 0.1 - 0.2)
