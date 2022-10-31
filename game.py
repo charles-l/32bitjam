@@ -1177,11 +1177,6 @@ def update(state):
             if glm.length(enemy.vel) > 3:
                 enemy.vel = glm.normalize(enemy.vel) * 3
             enemy.pos += enemy.vel
-            for collider in z_near(state.spike_obstacles, enemy.pos.z, 4):
-                if glm.distance(collider, enemy.pos) < 3:
-                    state.explosions.append((enemy.pos, rl.get_time()))
-                    rl.play_sound(explosion_sound)
-                    del state.enemies[i]
 
             enemy.state_time -= rl.get_frame_time()
             if enemy.state == "idle":
@@ -1195,6 +1190,13 @@ def update(state):
                     rl.play_sound(enemy_shot)
                     enemy.state = "idle"
                     enemy.state_time = 2 + random.random()
+
+            for collider in z_near(state.spike_obstacles, enemy.pos.z, 4):
+                if glm.distance(collider, enemy.pos) < 3:
+                    state.explosions.append((enemy.pos, rl.get_time()))
+                    rl.play_sound(explosion_sound)
+                    del state.enemies[i]
+                    break
 
     # update shark
     if state.shark:
