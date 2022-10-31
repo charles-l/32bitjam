@@ -16,10 +16,13 @@ pnoise = PerlinNoise()
 hide_hud = False
 
 def draw_text_centered(text, font_size, color, x=None, y=None):
+    m = rl.measure_text_ex(rl.get_font_default(), text, font_size, font_size//10)
     if x is None:
-        x = SCREEN_WIDTH // 2 - rl.measure_text(text, font_size) // 2
+        x = int(SCREEN_WIDTH // 2 - m.x // 2)
+    elif x < 0:
+        x = int(SCREEN_WIDTH // 2 - m.x // 2 - x)
     if y is None:
-        y = SCREEN_HEIGHT // 2 - font_size // 2
+        y = int(SCREEN_HEIGHT // 2 - m.y // 2)
     rl.draw_text(text, x, y, font_size, color)
 
 
@@ -370,6 +373,43 @@ def display_runup(label, value):
         yield
     rl.play_sound(impact)
 
+INSTRUCTIONS='''
+UP: forward (uses water)
+LEFT/RIGHT: move in direction
+
+SPACE: shoot
+
+LEFT SHIFT: dive (collects water)
+LEFT CTRL: water hover (uses water)
+
+TIMER WILL ACTIVATE ON LEVEL START'''
+
+def intro(state):
+    global hide_hud
+    hide_hud = True
+    state.checkpoint_dist = float('inf')
+    while not rl.is_key_released(rl.KEY_DOWN):
+        state.water = 1
+        draw_text_centered('h y d r o p l a n e', 50, rl.WHITE, y=SCREEN_HEIGHT // 2 - 100+5)
+        draw_text_centered('h y d r o p l a n e', 50, rl.BLUE, x=-2, y=SCREEN_HEIGHT // 2 - 100)
+        draw_text_centered('Hit DOWN to start', 20, rl.WHITE, y=SCREEN_HEIGHT - 50)
+        yield
+    yield
+    while not rl.is_key_released(rl.KEY_DOWN):
+        rl.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.fade(rl.BLACK, 0.1))
+        draw_text_centered(INSTRUCTIONS, 20, rl.WHITE)
+        if rl.get_time() % 0.4 < 0.2:
+            draw_text_centered("DON'T GET WATERLOGGED", 20, rl.RED, y=SCREEN_HEIGHT//2 + 160)
+        draw_text_centered('Hit DOWN to continue', 20, rl.WHITE, y = SCREEN_HEIGHT - 50)
+        yield
+    yield
+    t = rl.get_time()
+    while (i := glm.clamp(rl.get_time() - t, 0, 1)) < 1:
+        rl.draw_rectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.fade(rl.BLACK, i))
+        yield
+    global flash
+    flash=1
+
 def intermission(state):
     level_time_seconds = state.level_time
     state.obstacles = []
@@ -388,7 +428,7 @@ def intermission(state):
         if rl.get_time() % 0.8 < 0.6:
             draw_text_centered(f"REWARD: +1 ARMR", 40, rl.GREEN, y=SCREEN_HEIGHT//2 + 40)
         draw_text_centered(
-            f"Hit down arrow to continue", 20, rl.WHITE, y=SCREEN_HEIGHT // 2 + 20
+            f"Hit DOWN to continue", 20, rl.WHITE, y=SCREEN_HEIGHT // 2 + 20
         )
         if rl.is_key_pressed(rl.KEY_DOWN):
             return
@@ -496,6 +536,7 @@ def level_3(state):
 
 
 levels = [
+    intro,
     level_1,
     intermission,
     level_2,
@@ -508,7 +549,8 @@ level_coro = levels[state.level](state)
 
 
 def reset_level(state):
-    global cam, level_coro
+    global cam, level_coro, hide_hud
+    hide_hud = False
     rl.set_music_volume(bg, 1)
     rl.set_shader_value(
         skydome.materials[0].shader,
@@ -1239,7 +1281,6 @@ def update(state):
             goal_pos = state.shark.pos + glm.vec3(0, -1, 0)
 
         if abs(state.shark.pos.y - WATER_LEVEL) < 0.2:
-            print('sharksplash')
             add_splash(state, state.shark.pos + glm.vec3(5, 0, 6), scale=5+2*random.random(), toffset=random.random()*0.5)
             add_splash(state, state.shark.pos + glm.vec3(-5, 0, 6), scale=5+2*random.random(), toffset=random.random()*0.5)
             add_splash(state, state.shark.pos + glm.vec3(0, 0, 8), scale=3+random.random(), toffset=random.random()*0.5)
