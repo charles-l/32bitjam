@@ -1,0 +1,4 @@
+Nuitka==1.1.7
+perlin-noise==1.12
+PyGLM==2.5.7
+raylib==4.2.1.2
